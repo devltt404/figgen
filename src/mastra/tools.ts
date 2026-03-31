@@ -69,6 +69,7 @@ export const writeSandboxTool = createTool({
   inputSchema: GeneratedComponentSchema,
   outputSchema: writeSandboxOutputSchema,
   execute: async (inputData) => {
+    console.log(`  [Sandbox] writing ${inputData.componentName} to ${COMPONENT_PATH}`);
     // Write component TSX
     await fs.writeFile(COMPONENT_PATH, inputData.tsx, 'utf-8');
 

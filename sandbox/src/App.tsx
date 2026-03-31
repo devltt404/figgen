@@ -1,4 +1,4 @@
-import { GeneratedComponent } from './GeneratedComponent.js';
+import GeneratedComponent from "./GeneratedComponent";
 
 export default function App() {
   return (

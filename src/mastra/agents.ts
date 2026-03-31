@@ -6,16 +6,28 @@
  */
 
 import { Agent } from '@mastra/core/agent';
-import { openai } from '@ai-sdk/openai';
+import { openai, createOpenAI } from '@ai-sdk/openai';
 import { createOllama } from 'ollama-ai-provider';
 
-// Use Ollama when OLLAMA_MODEL is set, otherwise fall back to OpenAI GPT-4o.
-// The Mastra Agent model is used for tool-calling by the agent loop itself.
-// The actual code generation in runCodegen() reads the same env vars independently.
-const ollamaModel = process.env.OLLAMA_MODEL;
-const agentModel = ollamaModel
-  ? createOllama({ baseURL: process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434/api' })(ollamaModel)
-  : openai('gpt-4o');
+// Model selection mirrors the priority in codegen.ts:
+//   1. REQUESTY_API_KEY   → Requesty
+//   2. OPENROUTER_API_KEY → OpenRouter
+//   3. OLLAMA_MODEL       → local Ollama
+//   4. default            → OpenAI GPT-4o
+const agentModel = (() => {
+  if (process.env.REQUESTY_API_KEY) {
+    const model = process.env.REQUESTY_MODEL ?? 'openai-responses/gpt-5.4-nano';
+    return createOpenAI({ baseURL: 'https://router.requesty.ai/v1', apiKey: process.env.REQUESTY_API_KEY })(model);
+  }
+  if (process.env.OPENROUTER_API_KEY) {
+    const model = process.env.OPENROUTER_MODEL ?? 'qwen/qwen3-coder:free';
+    return createOpenAI({ baseURL: 'https://openrouter.ai/api/v1', apiKey: process.env.OPENROUTER_API_KEY })(model);
+  }
+  if (process.env.OLLAMA_MODEL) {
+    return createOllama({ baseURL: process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434/api' })(process.env.OLLAMA_MODEL);
+  }
+  return openai('gpt-4o');
+})();
 
 import {
   figmaIngestionTool,

@@ -3,10 +3,10 @@
  *
  * Role in the multi-agent system:
  *   First agent in the pipeline. Accepts a Figma URL, fetches the full
- *   design data via the Figma MCP server, and returns a structured
+ *   design data via the Figma REST API, and returns a structured
  *   FigmaContext that every downstream agent can consume.
  *
- * Input:  figmaUrl: string  — a valid Figma design or file URL
+ * Input:  figmaUrl: string  — a valid Figma design/file/site/proto URL
  * Output: FigmaContext      — node tree, design tokens, screenshot, assets
  *
  * IMPORTANT: This is a pure agent function. Zero imports from @mastra/core
@@ -14,7 +14,6 @@
  */
 
 import 'dotenv/config';
-import { MCPClient } from '@mastra/mcp';
 import { parseFigmaResponse } from '../utils/figma-parser.js';
 import { extractTokens } from '../utils/token-mapper.js';
 import type { FigmaContext, Asset } from '../types/index.js';
@@ -30,10 +29,12 @@ interface FigmaUrlParts {
 
 /**
  * Extract fileKey and nodeId from a Figma URL.
- * Supported formats:
- *   https://www.figma.com/file/{fileKey}/...?node-id={nodeId}
- *   https://www.figma.com/design/{fileKey}/...?node-id={nodeId}
- * node-id in the URL uses - as separator; converts to : for the API.
+ * Supported formats (all converted from URL dashes to API colons in node-id):
+ *   https://www.figma.com/file/{key}/...?node-id={id}
+ *   https://www.figma.com/design/{key}/...?node-id={id}
+ *   https://www.figma.com/proto/{key}/...?node-id={id}
+ *   https://www.figma.com/site/{key}/...?node-id={id}   ← Community
+ *   https://www.figma.com/board/{key}/...?node-id={id}  ← FigJam
  */
 function parseFigmaUrl(url: string): FigmaUrlParts {
   let parsed: URL;
@@ -43,16 +44,15 @@ function parseFigmaUrl(url: string): FigmaUrlParts {
     throw new Error(`Invalid Figma URL: "${url}"`);
   }
 
-  // Extract file key from path: /file/{key}/... or /design/{key}/...
-  const match = parsed.pathname.match(/\/(file|design)\/([^/]+)/);
+  const match = parsed.pathname.match(/\/(file|design|proto|site|board)\/([^/?]+)/);
   if (!match) {
     throw new Error(
-      `Could not extract file key from Figma URL. Expected path like /file/{key} or /design/{key}. Got: ${parsed.pathname}`
+      `Could not extract file key from Figma URL. ` +
+        `Expected a path like /design/{key}, /file/{key}, or /site/{key}. Got: ${parsed.pathname}`
     );
   }
   const fileKey = match[2];
 
-  // Extract node-id from query params
   const rawNodeId = parsed.searchParams.get('node-id');
   if (!rawNodeId) {
     throw new Error(
@@ -67,57 +67,56 @@ function parseFigmaUrl(url: string): FigmaUrlParts {
 }
 
 // ---------------------------------------------------------------------------
-// MCP client factory
+// Figma REST API helpers
 // ---------------------------------------------------------------------------
 
-function createFigmaMCPClient(): MCPClient {
-  const token = process.env.FIGMA_ACCESS_TOKEN;
-  if (!token) {
-    throw new Error(
-      'Missing FIGMA_ACCESS_TOKEN environment variable. ' +
-        'Add it to your .env file and try again.'
-    );
-  }
+const FIGMA_API = 'https://api.figma.com/v1';
 
-  return new MCPClient({
-    servers: {
-      figma: {
-        url: new URL('https://mcp.figma.com/mcp'),
-        requestInit: {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        },
-      },
-    },
-  });
+function figmaHeaders(token: string): Record<string, string> {
+  return { 'X-Figma-Token': token };
 }
 
-// ---------------------------------------------------------------------------
-// MCP tool helpers
-// ---------------------------------------------------------------------------
-
-async function callFigmaTool(
-  client: MCPClient,
-  toolName: string,
-  args: Record<string, unknown>
-): Promise<unknown> {
-  const tools = await client.listTools();
-  const tool = tools[`figma_${toolName}`] ?? tools[toolName];
-  if (!tool) {
-    const available = Object.keys(tools).join(', ');
-    throw new Error(
-      `Figma MCP tool "${toolName}" not found. Available tools: ${available}`
-    );
+async function figmaFetch(path: string, token: string): Promise<unknown> {
+  const res = await fetch(`${FIGMA_API}${path}`, {
+    headers: figmaHeaders(token),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`Figma API ${path} → HTTP ${res.status}: ${body}`);
   }
+  return res.json() as Promise<unknown>;
+}
 
-  // Mastra MCP tools expose execute(inputData, context)
-  type ExecFn = (args: Record<string, unknown>, ctx: Record<string, unknown>) => Promise<unknown>;
-  const exec = (tool as { execute?: ExecFn }).execute;
-  if (!exec) {
-    throw new Error(`Figma MCP tool "${toolName}" has no execute method.`);
-  }
-  return exec.call(tool, args, {});
+/**
+ * Fetch the node tree for a specific node from the Figma files API.
+ * Returns: { nodes: { [nodeId]: { document: {...} } } }
+ */
+async function fetchNodeData(fileKey: string, nodeId: string, token: string): Promise<unknown> {
+  return figmaFetch(`/files/${fileKey}/nodes?ids=${encodeURIComponent(nodeId)}`, token);
+}
+
+/**
+ * Fetch a rendered PNG image URL for the given node, then download it
+ * and return as a base64 string.
+ */
+async function fetchNodeScreenshot(fileKey: string, nodeId: string, token: string): Promise<string> {
+  // Step 1 — ask Figma to render the node as PNG, returns { images: { [nodeId]: url } }
+  const data = await figmaFetch(
+    `/images/${fileKey}?ids=${encodeURIComponent(nodeId)}&format=png&scale=1`,
+    token
+  ) as Record<string, unknown>;
+
+  const images = data['images'] as Record<string, string> | undefined;
+  // Figma returns the nodeId with : separators in the response
+  const imageUrl = images?.[nodeId] ?? images?.[nodeId.replace(':', '-')];
+
+  if (!imageUrl) return '';
+
+  // Step 2 — download the image and convert to base64
+  const imgRes = await fetch(imageUrl);
+  if (!imgRes.ok) return '';
+  const buffer = await imgRes.arrayBuffer();
+  return Buffer.from(buffer).toString('base64');
 }
 
 // ---------------------------------------------------------------------------
@@ -126,60 +125,63 @@ async function callFigmaTool(
 
 /**
  * Ingestion Agent entry point.
- * Receives a Figma URL, fetches design data via MCP, returns FigmaContext.
+ * Receives a Figma URL, fetches design data via the Figma REST API,
+ * returns a complete FigmaContext for the Codegen Agent.
  */
 export async function runIngestion(figmaUrl: string): Promise<FigmaContext> {
-  const { fileKey, nodeId } = parseFigmaUrl(figmaUrl);
-
-  const figmaMCP = createFigmaMCPClient();
-
-  // --- Fetch node tree ---
-  let rawNodeData: unknown;
-  try {
-    rawNodeData = await callFigmaTool(figmaMCP, 'get_figma_data', {
-      fileKey,
-      nodeId,
-    });
-  } catch (err) {
+  const token = process.env.FIGMA_ACCESS_TOKEN;
+  if (!token) {
     throw new Error(
-      `Ingestion Agent — get_figma_data failed for node "${nodeId}" in file "${fileKey}": ${String(err)}`
+      'Missing FIGMA_ACCESS_TOKEN environment variable. ' +
+        'Add it to your .env file and try again.'
     );
   }
 
-  // --- Fetch frame screenshot ---
-  let rawImageData: unknown;
+  const { fileKey, nodeId } = parseFigmaUrl(figmaUrl);
+  console.log(`  [Ingestion] file: ${fileKey}  node: ${nodeId}`);
+
+  // --- Fetch node tree ---
+  console.log(`  [Ingestion] fetching node tree…`);
+  let rawNodeData: unknown;
   try {
-    rawImageData = await callFigmaTool(figmaMCP, 'download_figma_images', {
-      fileKey,
-      nodeIds: [nodeId],
-      format: 'png',
-    });
+    rawNodeData = await fetchNodeData(fileKey, nodeId, token);
   } catch (err) {
     throw new Error(
-      `Ingestion Agent — download_figma_images failed for node "${nodeId}": ${String(err)}`
+      `Ingestion Agent — failed to fetch node "${nodeId}" from file "${fileKey}": ${String(err)}`
     );
+  }
+  console.log(`  [Ingestion] node tree received`);
+
+  // --- Fetch frame screenshot ---
+  console.log(`  [Ingestion] fetching screenshot…`);
+  let screenshot = '';
+  try {
+    screenshot = await fetchNodeScreenshot(fileKey, nodeId, token);
+    console.log(`  [Ingestion] screenshot ${screenshot ? 'received (' + Math.round(screenshot.length / 1024) + ' KB)' : 'empty'}`);
+  } catch (err) {
+    console.warn(`  [Ingestion] screenshot failed (continuing without it): ${String(err)}`);
   }
 
   // --- Parse node tree ---
+  console.log(`  [Ingestion] parsing node tree…`);
   const nodeTree = parseFigmaResponse(rawNodeData);
 
   if (nodeTree.length === 0) {
     throw new Error(
-      `Ingestion Agent — parseFigmaResponse returned an empty node tree for node "${nodeId}". ` +
-        'Check that the node-id is correct and the frame exists.'
+      `Ingestion Agent — empty node tree for node "${nodeId}". ` +
+        'Check that the node-id is correct and the frame exists in the file.'
     );
   }
+  console.log(`  [Ingestion] parsed ${nodeTree.length} root node(s)`);
 
   // --- Extract design tokens ---
   const tokens = extractTokens(nodeTree);
+  console.log(`  [Ingestion] extracted tokens: ${Object.values(tokens).reduce((n, g) => n + Object.keys(g).length, 0)} total`);
 
-  // --- Extract screenshot ---
-  const screenshot = extractScreenshot(rawImageData, nodeId);
+  // --- Assets: images embedded in the node tree ---
+  const assets = extractAssets(rawNodeData);
 
-  // --- Extract assets from image data ---
-  const assets = extractAssets(rawImageData, nodeId);
-
-  // --- Build FigmaContext from the root frame ---
+  // --- Build FigmaContext from the root node ---
   const rootFrame = nodeTree[0];
 
   return {
@@ -195,55 +197,48 @@ export async function runIngestion(figmaUrl: string): Promise<FigmaContext> {
 }
 
 // ---------------------------------------------------------------------------
-// Screenshot extraction
+// Asset extraction — picks up imageRef assets embedded in the node response
 // ---------------------------------------------------------------------------
 
-function stripBase64Prefix(s: string): string {
-  return s.replace(/^data:image\/[^;]+;base64,/, '');
-}
+function extractAssets(rawNodeData: unknown): Asset[] {
+  if (!rawNodeData || typeof rawNodeData !== 'object') return [];
+  const obj = rawNodeData as Record<string, unknown>;
 
-function extractScreenshot(rawImageData: unknown, nodeId: string): string {
-  // Shape: direct base64 string (check before object narrowing)
-  if (typeof rawImageData === 'string') {
-    return stripBase64Prefix(rawImageData);
-  }
+  // The /files/{key}/nodes response embeds image refs under `components`
+  // or inside node fills. We do a best-effort walk for now.
+  const assets: Asset[] = [];
 
-  if (!rawImageData || typeof rawImageData !== 'object') return '';
-
-  const data = rawImageData as Record<string, unknown>;
-
-  // Shape: { images: { [nodeId]: "data:image/png;base64,..." | raw base64 } }
-  if (data['images'] && typeof data['images'] === 'object') {
-    const images = data['images'] as Record<string, unknown>;
-    const url = images[nodeId] ?? images[nodeId.replace(':', '-')];
-    if (typeof url === 'string') {
-      return stripBase64Prefix(url);
+  function walk(node: unknown): void {
+    if (!node || typeof node !== 'object') return;
+    const n = node as Record<string, unknown>;
+    if (n['type'] === 'RECTANGLE' || n['type'] === 'VECTOR') {
+      const fills = n['fills'];
+      if (Array.isArray(fills)) {
+        for (const fill of fills) {
+          const f = fill as Record<string, unknown>;
+          if (f['type'] === 'IMAGE' && typeof f['imageRef'] === 'string') {
+            assets.push({
+              nodeId: String(n['id'] ?? ''),
+              name: String(n['name'] ?? 'image'),
+              base64: '',          // downloaded on-demand in Phase 2
+              mimeType: 'image/png',
+            });
+          }
+        }
+      }
+    }
+    if (Array.isArray(n['children'])) {
+      for (const child of n['children'] as unknown[]) walk(child);
     }
   }
 
-  return '';
-}
-
-// ---------------------------------------------------------------------------
-// Asset extraction
-// ---------------------------------------------------------------------------
-
-function extractAssets(rawImageData: unknown, _nodeId: string): Asset[] {
-  if (!rawImageData || typeof rawImageData !== 'object') return [];
-
-  const data = rawImageData as Record<string, unknown>;
-
-  if (data['images'] && typeof data['images'] === 'object') {
-    const images = data['images'] as Record<string, string>;
-    return Object.entries(images).map(([id, url]) => ({
-      nodeId: id,
-      name: id,
-      base64: typeof url === 'string'
-        ? url.replace(/^data:image\/[^;]+;base64,/, '')
-        : '',
-      mimeType: 'image/png',
-    }));
+  const nodes = obj['nodes'] as Record<string, unknown> | undefined;
+  if (nodes) {
+    for (const entry of Object.values(nodes)) {
+      const e = entry as Record<string, unknown>;
+      walk(e['document'] ?? entry);
+    }
   }
 
-  return [];
+  return assets;
 }

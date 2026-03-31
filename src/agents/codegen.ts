@@ -17,10 +17,17 @@ import 'dotenv/config';
 import OpenAI from 'openai';
 import type { FigmaContext, GeneratedComponent } from '../types/index.js';
 
-// Ollama runs an OpenAI-compatible endpoint at localhost:11434.
-// Set OLLAMA_BASE_URL if Ollama is on a different host/port.
+// Requesty — OpenAI-compatible router
+const REQUESTY_BASE_URL = 'https://router.requesty.ai/v1';
+const REQUESTY_MODEL = process.env.REQUESTY_MODEL ?? 'openai-responses/gpt-5.4-nano';
+
+// Ollama — local OpenAI-compatible endpoint
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434/v1';
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? 'llama3.2';
+
+// OpenRouter — cloud OpenAI-compatible endpoint (free tier available)
+const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
+const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL ?? 'qwen/qwen3-coder:free';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -85,33 +92,55 @@ Rules:
  * (optionally) the screenshot, and returns a GeneratedComponent with TSX.
  *
  * Model selection (checked in order):
- *   1. OLLAMA_MODEL env var → uses local Ollama via OpenAI-compatible endpoint
- *   2. OPENAI_API_KEY env var → uses OpenAI GPT-4o
+ *   1. OPENROUTER_API_KEY → OpenRouter (cloud, free tier available)
+ *   2. OLLAMA_MODEL       → local Ollama
+ *   3. OPENAI_API_KEY     → OpenAI GPT-4o
  */
 export async function runCodegen(ctx: FigmaContext): Promise<GeneratedComponent> {
-  const useOllama = Boolean(process.env.OLLAMA_MODEL ?? process.env.OLLAMA_BASE_URL);
+  const requestyKey = process.env.REQUESTY_API_KEY;
+  const openrouterKey = process.env.OPENROUTER_API_KEY;
+  const useOllama = !requestyKey && !openrouterKey && Boolean(process.env.OLLAMA_MODEL ?? process.env.OLLAMA_BASE_URL);
   const openaiKey = process.env.OPENAI_API_KEY;
 
-  if (!useOllama && !openaiKey) {
+  if (!requestyKey && !openrouterKey && !useOllama && !openaiKey) {
     throw new Error(
-      'No LLM configured. Set OLLAMA_MODEL for local Ollama, ' +
-        'or OPENAI_API_KEY for OpenAI.'
+      'No LLM configured. Set REQUESTY_API_KEY for Requesty, OPENROUTER_API_KEY for OpenRouter, ' +
+        'OLLAMA_MODEL for local Ollama, or OPENAI_API_KEY for OpenAI.'
     );
   }
 
-  const client = useOllama
-    ? new OpenAI({ baseURL: OLLAMA_BASE_URL, apiKey: 'ollama' })
-    : new OpenAI({ apiKey: openaiKey! });
+  let client: OpenAI;
+  let model: string;
+  let backend: string;
 
-  const model = useOllama ? OLLAMA_MODEL : 'gpt-4o';
+  if (requestyKey) {
+    client = new OpenAI({ baseURL: REQUESTY_BASE_URL, apiKey: requestyKey });
+    model = REQUESTY_MODEL;
+    backend = `Requesty (${model})`;
+  } else if (openrouterKey) {
+    client = new OpenAI({ baseURL: OPENROUTER_BASE_URL, apiKey: openrouterKey });
+    model = OPENROUTER_MODEL;
+    backend = `OpenRouter (${model})`;
+  } else if (useOllama) {
+    client = new OpenAI({ baseURL: OLLAMA_BASE_URL, apiKey: 'ollama' });
+    model = OLLAMA_MODEL;
+    backend = `Ollama (${model})`;
+  } else {
+    client = new OpenAI({ apiKey: openaiKey! });
+    model = 'gpt-4o';
+    backend = 'OpenAI (gpt-4o)';
+  }
 
-  // Ollama models typically don't support vision — skip the screenshot
-  // unless the model name suggests vision capability (llava, vision, etc.)
+  // Only send the screenshot if the model is known to support image input.
+  // gpt-4o always supports it; all others only if the model name signals vision.
   const modelSupportsVision =
-    !useOllama ||
-    /llava|vision|minicpm|moondream|bakllava|llama3\.2-vision/i.test(model);
+    model === 'gpt-4o' ||
+    /vision|llava|minicpm|moondream|bakllava/i.test(model);
 
   const componentNameFallback = toPascalCase(ctx.frameName) || 'GeneratedComponent';
+  console.log(`  [Codegen] backend: ${backend}`);
+  console.log(`  [Codegen] vision: ${modelSupportsVision && ctx.screenshot ? 'yes' : 'no'}`);
+  console.log(`  [Codegen] calling LLM…`);
 
   const systemMessage = SYSTEM_PROMPT.replace(
     /\{frameWidth\}/g,
@@ -163,19 +192,19 @@ Component must render correctly at exactly ${ctx.frameWidth}px wide.`;
 
     rawTsx = response.choices[0]?.message?.content ?? '';
   } catch (err) {
-    const backend = useOllama ? `Ollama (${model} @ ${OLLAMA_BASE_URL})` : `OpenAI (${model})`;
     throw new Error(`Codegen Agent — ${backend} call failed: ${String(err)}`);
   }
 
   if (!rawTsx.trim()) {
     throw new Error(
-      'Codegen Agent — GPT-4o returned an empty response. ' +
-        'Check your API key and try again.'
+      'Codegen Agent — LLM returned an empty response. ' +
+        'Check your API key / Ollama connection and try again.'
     );
   }
 
   const tsx = stripFences(rawTsx);
   const componentName = extractComponentName(tsx, componentNameFallback);
+  console.log(`  [Codegen] component: ${componentName} (${tsx.split('\n').length} lines)`);
 
   return {
     tsx,

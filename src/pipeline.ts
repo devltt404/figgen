@@ -7,7 +7,7 @@
  */
 
 import 'dotenv/config';
-import { mastra } from './mastra/index.js';
+import { mastra } from './mastra';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -21,8 +21,8 @@ function isFigmaUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
     return (
-      parsed.hostname === 'www.figma.com' &&
-      /\/(file|design)\//.test(parsed.pathname)
+      (parsed.hostname === 'www.figma.com' || parsed.hostname === 'figma.com') &&
+      /\/(file|design|proto|site|board)\//.test(parsed.pathname)
     );
   } catch {
     return false;
