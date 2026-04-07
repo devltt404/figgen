@@ -2,56 +2,119 @@
  * Codegen Agent — src/agents/codegen.ts
  *
  * Role in the multi-agent system:
- *   Second agent in the pipeline. Receives a FigmaContext from the
- *   Ingestion Agent and produces a single, self-contained React TSX
- *   component using Tailwind utility classes.
+ *   Single agent in the pipeline. Accepts a Figma URL, fetches a screenshot
+ *   via the Figma REST API, and prompts an LLM to generate a self-contained
+ *   React TSX component using Tailwind utility classes.
  *
- * Input:  FigmaContext       — node tree, tokens, screenshot from Figma
- * Output: GeneratedComponent — TSX source, component name, dependencies
- *
- * IMPORTANT: This is a pure agent function. Zero imports from @mastra/core
- * or any orchestration framework. The Mastra wrapper lives in src/mastra/.
+ * Input:  figmaUrl: string      — a valid Figma design/file/site/proto URL
+ * Output: GeneratedComponent    — TSX source, component name, dependencies
  */
 
-import 'dotenv/config';
-import OpenAI from 'openai';
-import type { FigmaContext, GeneratedComponent } from '../types/index.js';
+import "dotenv/config";
+import OpenAI from "openai";
+import type { GeneratedComponent } from "../types/index.js";
 
 // Requesty — OpenAI-compatible router
-const REQUESTY_BASE_URL = 'https://router.requesty.ai/v1';
-const REQUESTY_MODEL = process.env.REQUESTY_MODEL ?? 'openai-responses/gpt-5.4-nano';
+const REQUESTY_BASE_URL = "https://router.requesty.ai/v1";
+const REQUESTY_MODEL =
+  process.env.REQUESTY_MODEL ?? "openai-responses/gpt-5.4-nano";
 
 // Ollama — local OpenAI-compatible endpoint
-const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434/v1';
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? 'llama3.2';
+const OLLAMA_BASE_URL =
+  process.env.OLLAMA_BASE_URL ?? "http://localhost:11434/v1";
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? "llama3.2";
 
 // OpenRouter — cloud OpenAI-compatible endpoint (free tier available)
-const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
-const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL ?? 'qwen/qwen3-coder:free';
+const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+const OPENROUTER_MODEL =
+  process.env.OPENROUTER_MODEL ?? "qwen/qwen3-coder:free";
+
+// ---------------------------------------------------------------------------
+// URL parsing
+// ---------------------------------------------------------------------------
+
+interface FigmaUrlParts {
+  fileKey: string;
+  nodeId: string;
+  componentName: string;
+}
+
+function parseFigmaUrl(url: string): FigmaUrlParts {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`Invalid Figma URL: "${url}"`);
+  }
+
+  const match = parsed.pathname.match(
+    /\/(file|design|proto|site|board)\/([^/?]+)(?:\/([^/?]+))?/,
+  );
+  if (!match) {
+    throw new Error(
+      `Could not extract file key from Figma URL: ${parsed.pathname}`,
+    );
+  }
+  const fileKey = match[2];
+  const rawFileName = match[3] ?? "Component";
+  const componentName = toPascalCase(decodeURIComponent(rawFileName));
+
+  const rawNodeId = parsed.searchParams.get("node-id");
+  if (!rawNodeId) {
+    throw new Error(
+      `Figma URL is missing required ?node-id query parameter: "${url}"`,
+    );
+  }
+  const nodeId = rawNodeId.replace(/-/g, ":");
+
+  return { fileKey, nodeId, componentName };
+}
+
+// ---------------------------------------------------------------------------
+// Figma screenshot fetch
+// ---------------------------------------------------------------------------
+
+async function fetchScreenshot(
+  fileKey: string,
+  nodeId: string,
+  token: string,
+): Promise<string> {
+  const res = await fetch(
+    `https://api.figma.com/v1/images/${fileKey}?ids=${encodeURIComponent(nodeId)}&format=png&scale=1`,
+    { headers: { "X-Figma-Token": token } },
+  );
+  if (!res.ok) return "";
+
+  const data = (await res.json()) as Record<string, unknown>;
+  const images = data["images"] as Record<string, string> | undefined;
+  const imageUrl = images?.[nodeId] ?? images?.[nodeId.replace(":", "-")];
+  if (!imageUrl) return "";
+
+  const imgRes = await fetch(imageUrl);
+  if (!imgRes.ok) return "";
+  const buffer = await imgRes.arrayBuffer();
+  return Buffer.from(buffer).toString("base64");
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Convert any string to PascalCase for use as a React component name. */
 function toPascalCase(str: string): string {
   return str
     .replace(/[^a-zA-Z0-9]+(.)/g, (_, chr: string) => chr.toUpperCase())
     .replace(/^(.)/, (c: string) => c.toUpperCase())
-    .replace(/[^a-zA-Z0-9]/g, '');
+    .replace(/[^a-zA-Z0-9]/g, "");
 }
 
-/** Strip accidental markdown code fences from LLM output. */
 function stripFences(raw: string): string {
   return raw
-    .replace(/^```(?:tsx|typescript|ts|jsx|js)?\n?/m, '')
-    .replace(/\n?```$/m, '')
+    .replace(/^```(?:tsx|typescript|ts|jsx|js)?\n?/m, "")
+    .replace(/\n?```$/m, "")
     .trim();
 }
 
-/** Extract the exported component name from TSX source. */
 function extractComponentName(tsx: string, fallback: string): string {
-  // Match: export function Foo, export const Foo, export { Foo }
   const patterns = [
     /export\s+(?:default\s+)?(?:function|class)\s+([A-Z][A-Za-z0-9_]*)/,
     /export\s+const\s+([A-Z][A-Za-z0-9_]*)\s*[=:]/,
@@ -68,12 +131,12 @@ function extractComponentName(tsx: string, fallback: string): string {
 // System prompt
 // ---------------------------------------------------------------------------
 
-const SYSTEM_PROMPT = `You are the Codegen Agent in a Figma-to-code multi-agent system.
-Your sole responsibility is to convert a structured Figma design context into a single, self-contained React TSX component.
+const SYSTEM_PROMPT = `You are a Figma-to-code agent.
+Your task is to convert a Figma design into a single, self-contained React TSX component.
 
 Rules:
 - Output ONLY the raw TSX file content. No explanation, no markdown fences, no comments about what you did.
-- Export the component as a named export. Derive the name from the Figma frame name in PascalCase.
+- Export the component as a named export. Derive the name from the component name hint provided.
 - Use only Tailwind utility classes. No inline styles, no CSS modules.
 - Prefer standard Tailwind scale values. Use arbitrary values like w-[123px] only when no standard value is within 4px.
 - Use semantic HTML: nav, header, main, section, article, footer, button, a, h1-h6, p, ul, li where appropriate.
@@ -88,24 +151,30 @@ Rules:
 
 /**
  * Codegen Agent entry point.
- * Receives a FigmaContext, calls the configured LLM with the node tree +
- * (optionally) the screenshot, and returns a GeneratedComponent with TSX.
+ * Fetches a screenshot from the Figma URL, then calls the configured LLM
+ * to generate a React TSX component from the visual reference.
  *
  * Model selection (checked in order):
- *   1. OPENROUTER_API_KEY → OpenRouter (cloud, free tier available)
- *   2. OLLAMA_MODEL       → local Ollama
- *   3. OPENAI_API_KEY     → OpenAI GPT-4o
+ *   1. REQUESTY_API_KEY   → Requesty
+ *   2. OPENROUTER_API_KEY → OpenRouter
+ *   3. OLLAMA_MODEL       → local Ollama
+ *   4. OPENAI_API_KEY     → OpenAI GPT-4o
  */
-export async function runCodegen(ctx: FigmaContext): Promise<GeneratedComponent> {
+export async function runCodegen(
+  figmaUrl: string,
+): Promise<GeneratedComponent> {
   const requestyKey = process.env.REQUESTY_API_KEY;
   const openrouterKey = process.env.OPENROUTER_API_KEY;
-  const useOllama = !requestyKey && !openrouterKey && Boolean(process.env.OLLAMA_MODEL ?? process.env.OLLAMA_BASE_URL);
+  const useOllama =
+    !requestyKey &&
+    !openrouterKey &&
+    Boolean(process.env.OLLAMA_MODEL ?? process.env.OLLAMA_BASE_URL);
   const openaiKey = process.env.OPENAI_API_KEY;
 
   if (!requestyKey && !openrouterKey && !useOllama && !openaiKey) {
     throw new Error(
-      'No LLM configured. Set REQUESTY_API_KEY for Requesty, OPENROUTER_API_KEY for OpenRouter, ' +
-        'OLLAMA_MODEL for local Ollama, or OPENAI_API_KEY for OpenAI.'
+      "No LLM configured. Set REQUESTY_API_KEY for Requesty, OPENROUTER_API_KEY for OpenRouter, " +
+        "OLLAMA_MODEL for local Ollama, or OPENAI_API_KEY for OpenAI.",
     );
   }
 
@@ -118,50 +187,59 @@ export async function runCodegen(ctx: FigmaContext): Promise<GeneratedComponent>
     model = REQUESTY_MODEL;
     backend = `Requesty (${model})`;
   } else if (openrouterKey) {
-    client = new OpenAI({ baseURL: OPENROUTER_BASE_URL, apiKey: openrouterKey });
+    client = new OpenAI({
+      baseURL: OPENROUTER_BASE_URL,
+      apiKey: openrouterKey,
+    });
     model = OPENROUTER_MODEL;
     backend = `OpenRouter (${model})`;
   } else if (useOllama) {
-    client = new OpenAI({ baseURL: OLLAMA_BASE_URL, apiKey: 'ollama' });
+    client = new OpenAI({ baseURL: OLLAMA_BASE_URL, apiKey: "ollama" });
     model = OLLAMA_MODEL;
     backend = `Ollama (${model})`;
   } else {
     client = new OpenAI({ apiKey: openaiKey! });
-    model = 'gpt-4o';
-    backend = 'OpenAI (gpt-4o)';
+    model = "gpt-4o";
+    backend = "OpenAI (gpt-4o)";
   }
 
-  // Only send the screenshot if the model is known to support image input.
-  // gpt-4o always supports it; all others only if the model name signals vision.
-  const modelSupportsVision =
-    model === 'gpt-4o' ||
-    /vision|llava|minicpm|moondream|bakllava/i.test(model);
+  const modelSupportsVision = true;
 
-  const componentNameFallback = toPascalCase(ctx.frameName) || 'GeneratedComponent';
+  // Parse URL to get fileKey, nodeId, and a component name hint
+  const {
+    fileKey,
+    nodeId,
+    componentName: componentNameHint,
+  } = parseFigmaUrl(figmaUrl);
+
   console.log(`  [Codegen] backend: ${backend}`);
-  console.log(`  [Codegen] vision: ${modelSupportsVision && ctx.screenshot ? 'yes' : 'no'}`);
+
+  // Fetch screenshot if Figma token is available and model supports vision
+  let screenshot = "";
+  const figmaToken = process.env.FIGMA_ACCESS_TOKEN;
+  if (figmaToken && modelSupportsVision) {
+    console.log(`  [Codegen] fetching screenshot…`);
+    try {
+      screenshot = await fetchScreenshot(fileKey, nodeId, figmaToken);
+      console.log(
+        `  [Codegen] screenshot ${screenshot ? `received (${Math.round(screenshot.length / 1024)} KB)` : "empty"}`,
+      );
+    } catch (err) {
+      console.warn(
+        `  [Codegen] screenshot failed (continuing without it): ${String(err)}`,
+      );
+    }
+  } else {
+    console.log(
+      `  [Codegen] vision: no (${!figmaToken ? "no FIGMA_ACCESS_TOKEN" : "model does not support vision"})`,
+    );
+  }
+
   console.log(`  [Codegen] calling LLM…`);
 
-  const systemMessage = SYSTEM_PROMPT.replace(
-    /\{frameWidth\}/g,
-    String(ctx.frameWidth)
-  );
-
-  const userText = `You are receiving a message from the Ingestion Agent.
-
-Frame: ${ctx.frameName} (${ctx.frameWidth}x${ctx.frameHeight}px)
-
-Design tokens extracted from the design:
-${JSON.stringify(ctx.tokens, null, 2)}
-
-Node tree:
-${JSON.stringify(ctx.nodeTree, null, 2)}
-
-Use the design tokens and node tree as your structural guide.
-Use the attached screenshot as your visual ground truth.
-When the node tree and screenshot conflict, trust the screenshot.
-
-Component must render correctly at exactly ${ctx.frameWidth}px wide.`;
+  const userText = `Generate a React TSX component named "${componentNameHint}" for this Figma design:
+${figmaUrl}
+${screenshot ? "\nUse the attached screenshot as your visual reference. Match layout, colors, typography, and spacing as closely as possible." : "\nNo screenshot available — infer the design from the URL context and generate a reasonable component."}`;
 
   let rawTsx: string;
   try {
@@ -169,18 +247,18 @@ Component must render correctly at exactly ${ctx.frameWidth}px wide.`;
       model,
       max_tokens: 4096,
       messages: [
-        { role: 'system', content: systemMessage },
+        { role: "system", content: SYSTEM_PROMPT },
         {
-          role: 'user',
+          role: "user",
           content: [
-            { type: 'text', text: userText },
-            ...(ctx.screenshot && modelSupportsVision
+            { type: "text", text: userText },
+            ...(screenshot && modelSupportsVision
               ? [
                   {
-                    type: 'image_url' as const,
+                    type: "image_url" as const,
                     image_url: {
-                      url: `data:image/png;base64,${ctx.screenshot}`,
-                      detail: 'high' as const,
+                      url: `data:image/png;base64,${screenshot}`,
+                      detail: "high" as const,
                     },
                   },
                 ]
@@ -190,26 +268,28 @@ Component must render correctly at exactly ${ctx.frameWidth}px wide.`;
       ],
     });
 
-    rawTsx = response.choices[0]?.message?.content ?? '';
+    rawTsx = response.choices[0]?.message?.content ?? "";
   } catch (err) {
     throw new Error(`Codegen Agent — ${backend} call failed: ${String(err)}`);
   }
 
   if (!rawTsx.trim()) {
     throw new Error(
-      'Codegen Agent — LLM returned an empty response. ' +
-        'Check your API key / Ollama connection and try again.'
+      "Codegen Agent — LLM returned an empty response. " +
+        "Check your API key / Ollama connection and try again.",
     );
   }
 
   const tsx = stripFences(rawTsx);
-  const componentName = extractComponentName(tsx, componentNameFallback);
-  console.log(`  [Codegen] component: ${componentName} (${tsx.split('\n').length} lines)`);
+  const componentName = extractComponentName(tsx, componentNameHint);
+  console.log(
+    `  [Codegen] component: ${componentName} (${tsx.split("\n").length} lines)`,
+  );
 
   return {
     tsx,
     componentName,
-    dependencies: ['react'],
+    dependencies: ["react"],
     tailwindConfigPatch: null,
   };
 }

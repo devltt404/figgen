@@ -2,7 +2,6 @@
  * src/mastra/tools.ts
  * Mastra tool definitions — bridges between the orchestrator and each agent function.
  * Each tool wraps one pure agent function with a typed Zod input/output schema.
- * This is the ONLY place agent functions are called from the Mastra layer.
  */
 
 import { createTool } from '@mastra/core/tools';
@@ -11,11 +10,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import {
-  FigmaContextSchema,
-  GeneratedComponentSchema,
-} from '../types/index.js';
-import { runIngestion } from '../agents/ingestion.js';
+import { GeneratedComponentSchema } from '../types/index.js';
 import { runCodegen } from '../agents/codegen.js';
 import { runRender } from '../agents/render.js';
 import { runDiff } from '../agents/diff.js';
@@ -27,30 +22,16 @@ const COMPONENT_PATH = path.join(SANDBOX_DIR, 'src/GeneratedComponent.tsx');
 const TAILWIND_CONFIG_PATH = path.join(SANDBOX_DIR, 'tailwind.config.ts');
 
 // ---------------------------------------------------------------------------
-// figmaIngestionTool
-// ---------------------------------------------------------------------------
-
-export const figmaIngestionTool = createTool({
-  id: 'figma-ingestion',
-  description: 'Ingestion Agent — fetches Figma design data and returns a structured FigmaContext',
-  inputSchema: z.object({ figmaUrl: z.string().url() }),
-  outputSchema: FigmaContextSchema,
-  execute: async (inputData) => {
-    return runIngestion(inputData.figmaUrl);
-  },
-});
-
-// ---------------------------------------------------------------------------
 // codegenTool
 // ---------------------------------------------------------------------------
 
 export const codegenTool = createTool({
   id: 'codegen',
-  description: 'Codegen Agent — generates a React TSX component from a FigmaContext',
-  inputSchema: FigmaContextSchema,
+  description: 'Codegen Agent — fetches the Figma design and generates a React TSX component',
+  inputSchema: z.object({ figmaUrl: z.string().url() }),
   outputSchema: GeneratedComponentSchema,
   execute: async (inputData) => {
-    return runCodegen(inputData);
+    return runCodegen(inputData.figmaUrl);
   },
 });
 
@@ -70,10 +51,8 @@ export const writeSandboxTool = createTool({
   outputSchema: writeSandboxOutputSchema,
   execute: async (inputData) => {
     console.log(`  [Sandbox] writing ${inputData.componentName} to ${COMPONENT_PATH}`);
-    // Write component TSX
     await fs.writeFile(COMPONENT_PATH, inputData.tsx, 'utf-8');
 
-    // Merge tailwind config patch if present
     if (inputData.tailwindConfigPatch) {
       await mergeTailwindPatch(inputData.tailwindConfigPatch);
     }
@@ -94,10 +73,9 @@ async function mergeTailwindPatch(patch: string): Promise<void> {
   try {
     config = await fs.readFile(TAILWIND_CONFIG_PATH, 'utf-8');
   } catch {
-    return; // If config doesn't exist, skip
+    return;
   }
 
-  // Find the extend block and inject the patch content
   const extendPattern = /extend\s*:\s*\{([^}]*)\}/s;
   const match = config.match(extendPattern);
 
@@ -115,7 +93,6 @@ async function mergeTailwindPatch(patch: string): Promise<void> {
 // Phase 2 tool stubs
 // ---------------------------------------------------------------------------
 
-// PHASE 2: renderTool — screenshots the rendered component in a headless browser
 export const renderTool = createTool({
   id: 'render',
   description: 'Render Agent — renders the component in a headless browser and returns a screenshot',
@@ -127,21 +104,19 @@ export const renderTool = createTool({
   },
 });
 
-// PHASE 2: diffTool — compares Figma screenshot vs rendered screenshot
 export const diffTool = createTool({
   id: 'diff',
   description: 'Diff Agent — compares the Figma design against the rendered output',
   inputSchema: z.object({
-    figmaContext: FigmaContextSchema,
+    figmaUrl: z.string(),
     screenshot: z.string(),
   }),
   outputSchema: z.object({}),
   execute: async (inputData) => {
-    return runDiff(inputData.figmaContext, inputData.screenshot);
+    return runDiff(inputData.figmaUrl, inputData.screenshot);
   },
 });
 
-// PHASE 2: refinementTool — applies targeted patches based on diff issues
 export const refinementTool = createTool({
   id: 'refinement',
   description: 'Refinement Agent — patches the component to fix visual diff issues',

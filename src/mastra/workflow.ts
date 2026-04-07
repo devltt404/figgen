@@ -5,13 +5,12 @@
 import { createWorkflow, createStep } from '@mastra/core/workflows';
 import { z } from 'zod';
 
-import { figmaIngestionTool, codegenTool, writeSandboxTool } from './tools.js';
+import { codegenTool, writeSandboxTool } from './tools.js';
 
 // ---------------------------------------------------------------------------
 // Workflow steps (each wraps one tool)
 // ---------------------------------------------------------------------------
 
-const ingestionStep = createStep(figmaIngestionTool);
 const codegenStep = createStep(codegenTool);
 const writeSandboxStep = createStep(writeSandboxTool);
 
@@ -21,7 +20,7 @@ const writeSandboxStep = createStep(writeSandboxTool);
 
 export const figmaToCodeWorkflow = createWorkflow({
   id: 'figma-to-code',
-  description: 'Figma-to-code multi-agent pipeline: Ingestion → Codegen → Write Sandbox',
+  description: 'Figma-to-code pipeline: Codegen → Write Sandbox',
   inputSchema: z.object({
     figmaUrl: z.string().url(),
   }),
@@ -30,7 +29,6 @@ export const figmaToCodeWorkflow = createWorkflow({
     componentName: z.string(),
   }),
 })
-  .then(ingestionStep)
   .then(codegenStep)
   .then(writeSandboxStep)
   .commit();
