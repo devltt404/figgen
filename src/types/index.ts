@@ -22,15 +22,27 @@ export type GeneratedComponent = z.infer<typeof GeneratedComponentSchema>;
 // Implement fully when Phase 2 begins
 // ---------------------------------------------------------------------------
 
-// PHASE 2: DiffIssue — a single visual discrepancy between the Figma design
-// and the rendered component (e.g. wrong color, wrong spacing, missing element)
-export const DiffIssueSchema = z.object({});
+// DiffIssue — a single visual discrepancy between the Figma design and the rendered component
+export const DiffIssueSchema = z.object({
+  category: z.enum(['layout', 'color', 'typography', 'spacing', 'missing-element', 'extra-element', 'other']),
+  description: z.string(),
+});
 export type DiffIssue = z.infer<typeof DiffIssueSchema>;
 
-// PHASE 2: DiffReport — the full set of diff issues + an overall fidelity score
-export const DiffReportSchema = z.object({});
+// DiffReport — the full set of diff issues + an overall fidelity score (0–1)
+export const DiffReportSchema = z.object({
+  fidelityScore: z.number().min(0).max(1),
+  issues: z.array(DiffIssueSchema),
+  summary: z.string(),
+});
 export type DiffReport = z.infer<typeof DiffReportSchema>;
 
-// PHASE 2: RefinementResult — the patched component after applying diff fixes
-export const RefinementResultSchema = z.object({});
+// RefinementResult — the patched component after applying diff fixes
+export const RefinementResultSchema = z.object({
+  tsx: z.string(),
+  componentName: z.string(),
+  dependencies: z.array(z.string()),
+  tailwindConfigPatch: z.string().nullable(),
+  patchSummary: z.string(),
+});
 export type RefinementResult = z.infer<typeof RefinementResultSchema>;

@@ -10,7 +10,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { GeneratedComponentSchema } from '../types/index.js';
+import { GeneratedComponentSchema, DiffReportSchema } from '../types/index.js';
 import { runCodegen } from '../agents/codegen.js';
 import { runRender } from '../agents/render.js';
 import { runDiff } from '../agents/diff.js';
@@ -51,7 +51,11 @@ export const writeSandboxTool = createTool({
   outputSchema: writeSandboxOutputSchema,
   execute: async (inputData) => {
     console.log(`  [Sandbox] writing ${inputData.componentName} to ${COMPONENT_PATH}`);
-    await fs.writeFile(COMPONENT_PATH, inputData.tsx, 'utf-8');
+    // Ensure App.tsx can import it as a default — append if not already present
+    const tsx = inputData.tsx.includes('export default')
+      ? inputData.tsx
+      : `${inputData.tsx}\n\nexport default ${inputData.componentName};\n`;
+    await fs.writeFile(COMPONENT_PATH, tsx, 'utf-8');
 
     if (inputData.tailwindConfigPatch) {
       await mergeTailwindPatch(inputData.tailwindConfigPatch);
@@ -111,7 +115,7 @@ export const diffTool = createTool({
     figmaUrl: z.string(),
     screenshot: z.string(),
   }),
-  outputSchema: z.object({}),
+  outputSchema: DiffReportSchema,
   execute: async (inputData) => {
     return runDiff(inputData.figmaUrl, inputData.screenshot);
   },
@@ -122,7 +126,7 @@ export const refinementTool = createTool({
   description: 'Refinement Agent — patches the component to fix visual diff issues',
   inputSchema: z.object({
     component: GeneratedComponentSchema,
-    diff: z.object({}),
+    diff: DiffReportSchema,
   }),
   outputSchema: z.object({}),
   execute: async (inputData) => {

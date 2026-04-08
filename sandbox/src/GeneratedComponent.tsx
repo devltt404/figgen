@@ -1,67 +1,80 @@
-export default function FiggenTest () {
+export function FiggenTest() {
   return (
-    <div className="min-h-screen w-full bg-white flex items-start justify-center p-6">
-      <main className="w-full max-w-[520px]">
-        <article className="bg-white rounded-[20px] shadow-[0_18px_60px_rgba(0,0,0,0.08)] border border-gray-100 p-8 md:p-10">
-          <header className="flex flex-col gap-5">
-            <div className="inline-flex items-center gap-2 rounded-full bg-[#EAF2FF] px-4 py-2 text-[13px] leading-none text-[#2F6CF6] font-medium w-fit">
-              <span className="inline-flex h-4 w-4 items-center justify-center">
-                <div className="h-2.5 w-2.5 bg-[#2F6CF6] rounded-[3px]" aria-label="icon" />
-              </span>
-              <span>Accounting Services</span>
-            </div>
+    <div className="bg-white p-[40px] flex flex-col gap-[24px] w-[480px] h-[560px] box-border">
+      <div
+        className="bg-[#ecf4ff] rounded-[99px] px-[12px] py-[6px] w-[156px] h-[27px] flex items-center justify-start box-border"
+        aria-label="Badge"
+      >
+        <span
+          className="text-[#2e6bde] font-[Inter] font-medium text-[12px] leading-[14.5227px] block"
+          style={{ lineHeight: "14.522727012634277px" }}
+        >
+          ✦ Accounting Services
+        </span>
+      </div>
 
-            <h1 className="text-[34px] md:text-[38px] leading-[1.08] font-extrabold tracking-[-0.02em] text-gray-900">
-              Friendly financial clarity for
-              <br />
-              your business
-            </h1>
+      <h1
+        className="text-[#171a21] font-[Inter] font-bold text-[28px] leading-[38.0800px] w-[400px] h-[76px] box-border"
+        style={{ lineHeight: "38.08000183105469px" }}
+      >
+        Friendly financial clarity for your business
+      </h1>
 
-            <p className="text-[15px] md:text-[16px] leading-[1.6] text-gray-600 max-w-[420px]">
-              We handle bookkeeping, tax filing, and payroll so you can focus on growing your business.
-            </p>
-          </header>
+      <p
+        className="text-[#666b78] font-[Inter] font-normal text-[15px] leading-[24px] w-[400px] h-[48px] box-border"
+        style={{ lineHeight: "24px" }}
+      >
+        We handle bookkeeping, tax filing, and payroll so you can focus on growing your business.
+      </p>
 
-          <section className="mt-8">
-            <div className="flex items-stretch justify-between gap-4">
-              <div className="flex-1 rounded-xl bg-[#F4F7FF] px-3 py-5 text-center">
-                <div className="text-[26px] font-extrabold text-gray-900 leading-[1.05]">500+</div>
-                <div className="text-[12px] text-gray-500 mt-1">Clients served</div>
-              </div>
-              <div className="flex-1 rounded-xl bg-[#F4F7FF] px-3 py-5 text-center">
-                <div className="text-[26px] font-extrabold text-gray-900 leading-[1.05]">12yr</div>
-                <div className="text-[12px] text-gray-500 mt-1">In business</div>
-              </div>
-              <div className="flex-1 rounded-xl bg-[#F4F7FF] px-3 py-5 text-center">
-                <div className="text-[26px] font-extrabold text-gray-900 leading-[1.05]">98%</div>
-                <div className="text-[12px] text-gray-500 mt-1">Satisfaction</div>
-              </div>
-            </div>
-
-            <div className="mt-6 border-t border-gray-100" />
-
-            <div className="mt-8 flex flex-col items-start gap-4">
-              <button
-                type="button"
-                className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#2F6CF6] px-6 py-3 text-[15px] font-semibold text-white shadow-[0_10px_30px_rgba(47,108,246,0.35)] w-full md:w-[320px]"
-                aria-label="Get a free consultation"
-              >
-                <span>Get a free consultation</span>
-                <span className="inline-flex items-center justify-center">
-                  <div className="h-4 w-4">
-                    <div className="h-[2px] w-[10px] bg-white rounded-full translate-x-[1px] translate-y-[2px]" />
-                    <div className="h-[7px] w-[7px] border-t-[2px] border-r-[2px] border-white rotate-[45deg] translate-x-[5px] translate-y-[-1px]" />
-                  </div>
-                </span>
-              </button>
-
-              <p className="text-[12px] text-gray-400">
-                No credit card required · Cancel anytime
-              </p>
-            </div>
-          </section>
+      <section className="w-[341px] h-[74px] flex flex-row gap-[16px]" aria-label="StatsRow">
+        <article className="bg-[#f7f7fa] rounded-[10px] px-[16px] py-[14px] w-[114px] h-[74px] flex flex-col box-border gap-[4px]">
+          <div className="text-[#171a21] font-[Inter] font-bold text-[22px] leading-[26.625px] w-[60px] h-[27px] box-border">
+            500+
+          </div>
+          <div className="text-[#80858f] font-[Inter] font-normal text-[12px] leading-[14.5227px] w-[82px] h-[15px] box-border">
+            Clients served
+          </div>
         </article>
-      </main>
+
+        <article className="bg-[#f7f7fa] rounded-[10px] px-[16px] py-[14px] w-[96px] h-[74px] flex flex-col box-border gap-[4px]">
+          <div className="text-[#171a21] font-[Inter] font-bold text-[22px] leading-[26.625px] w-[47px] h-[27px] box-border">
+            12yr
+          </div>
+          <div className="text-[#80858f] font-[Inter] font-normal text-[12px] leading-[14.5227px] w-[64px] h-[15px] box-border whitespace-nowrap">
+            In business
+          </div>
+        </article>
+
+        <article className="bg-[#f7f7fa] rounded-[10px] px-[16px] py-[14px] w-[99px] h-[74px] flex flex-col box-border gap-[4px]">
+          <div className="text-[#171a21] font-[Inter] font-bold text-[22px] leading-[26.625px] w-[48px] h-[27px] box-border">
+            98%
+          </div>
+          <div className="text-[#80858f] font-[Inter] font-normal text-[12px] leading-[14.5227px] w-[67px] h-[15px] box-border">
+            Satisfaction
+          </div>
+        </article>
+      </section>
+
+      <div className="bg-[#e5e8ed] w-[400px] h-[1px]" aria-label="Divider" />
+
+      <div
+        className="bg-[#2e6bde] rounded-[10px] px-[28px] py-[16px] w-[240px] h-[50px] flex items-center justify-center box-border"
+        aria-label="CTAButton"
+      >
+        <span
+          className="text-white font-[Inter] font-semibold text-[15px] leading-[18.1534px] block"
+          style={{ lineHeight: "18.15340805053711px" }}
+        >
+          Get a free consultation →
+        </span>
+      </div>
+
+      <footer className="text-[#999ea8] font-[Inter] font-normal text-[12px] leading-[14.5227px] w-[400px] h-[15px] flex items-start justify-center box-border">
+        <span style={{ lineHeight: "14.522727012634277px" }}>No credit card required · Cancel anytime</span>
+      </footer>
     </div>
   );
-};
+}
+
+export default FiggenTest;
