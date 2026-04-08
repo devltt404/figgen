@@ -21,7 +21,7 @@ import { runRender } from "./agents/render.js";
 import { runDiff } from "./agents/diff.js";
 import { runRefinement } from "./agents/refinement.js";
 import { fetchFigmaScreenshot, getFigmaNodeSize } from "./utils/figma.js";
-import { saveDebugRun, type IterationArtifacts } from "./utils/debug.js";
+import { createRunDir, saveDebugRun, type IterationArtifacts } from "./utils/debug.js";
 import type { GeneratedComponent } from "./types/index.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -60,6 +60,7 @@ async function main(): Promise<void> {
   const maxIter =
     maxIterArg !== -1 ? parseInt(args[maxIterArg + 1] ?? "", 10) : DEFAULT_MAX_ITER;
   const skipCodegen = args.includes("--skip-codegen");
+  if (args.includes("--stop-after-figma")) process.env.STOP_AFTER_FIGMA = "1";
 
   if (!figmaUrl || !isFigmaUrl(figmaUrl)) {
     console.error(
@@ -75,6 +76,9 @@ async function main(): Promise<void> {
 
   console.log(`\nfiggen — Figma-to-code pipeline`);
   console.log(`URL: ${figmaUrl}\n`);
+
+  const runDir = await createRunDir();
+  console.log(`  [Pipeline] run dir → ${runDir}\n`);
 
   // -------------------------------------------------------------------------
   // Phase 1: Codegen + Write Sandbox (via Mastra workflow)
@@ -102,7 +106,7 @@ async function main(): Promise<void> {
 
     let result: Awaited<ReturnType<typeof run.start>>;
     try {
-      result = await run.start({ inputData: { figmaUrl } });
+      result = await run.start({ inputData: { figmaUrl, debugDir: runDir } });
     } catch (err) {
       console.error(`\n✗ Pipeline failed: ${String(err)}`);
       process.exit(1);
@@ -188,7 +192,7 @@ async function main(): Promise<void> {
     // Diff
     let diffReport: Awaited<ReturnType<typeof runDiff>>;
     try {
-      diffReport = await runDiff(figmaUrl, renderedScreenshot);
+      diffReport = await runDiff(figmaUrl, renderedScreenshot, runDir, iteration);
       console.log(
         `[Diff ${iteration}]        — fidelity: ${(diffReport.fidelityScore * 100).toFixed(1)}% — ${diffReport.issues.length} issue(s)`,
       );
@@ -214,7 +218,7 @@ async function main(): Promise<void> {
     // Refine
     let refined: Awaited<ReturnType<typeof runRefinement>>;
     try {
-      refined = await runRefinement(currentComponent, diffReport);
+      refined = await runRefinement(currentComponent, diffReport, runDir, iteration);
       console.log(`[Refine ${iteration}]      — completed (${refined.patchSummary})`);
     } catch (err) {
       console.error(`\n✗ Refinement failed (iteration ${iteration}): ${String(err)}`);
@@ -235,9 +239,8 @@ async function main(): Promise<void> {
   // Save debug artifacts
   // -------------------------------------------------------------------------
 
-  let debugDir = "";
   try {
-    debugDir = await saveDebugRun(figmaScreenshot, debugIterations);
+    await saveDebugRun(runDir, figmaScreenshot, debugIterations);
   } catch (err) {
     console.warn(`  [Pipeline] debug save failed: ${String(err)}`);
   }
@@ -255,7 +258,7 @@ async function main(): Promise<void> {
   File:           ${SANDBOX_COMPONENT_PATH}
   Iterations:     ${debugIterations.length}
   Fidelity score: ${finalDiff ? `${(finalDiff.fidelityScore * 100).toFixed(1)}%` : "n/a"}
-  Debug images:   ${debugDir || "n/a"}
+  Debug dir:      ${runDir}
 `);
 
   if (finalDiff && finalDiff.issues.length > 0) {

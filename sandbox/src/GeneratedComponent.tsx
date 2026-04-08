@@ -1,80 +1,57 @@
-export function FiggenTest() {
+export function FiggenTestDesign(): JSX.Element {
   return (
-    <div className="bg-white p-[40px] flex flex-col gap-[24px] w-[480px] h-[560px] box-border">
-      <div
-        className="bg-[#ecf4ff] rounded-[99px] px-[12px] py-[6px] w-[156px] h-[27px] flex items-center justify-start box-border"
-        aria-label="Badge"
-      >
-        <span
-          className="text-[#2e6bde] font-[Inter] font-medium text-[12px] leading-[14.5227px] block"
-          style={{ lineHeight: "14.522727012634277px" }}
-        >
-          ✦ Accounting Services
-        </span>
-      </div>
-
-      <h1
-        className="text-[#171a21] font-[Inter] font-bold text-[28px] leading-[38.0800px] w-[400px] h-[76px] box-border"
-        style={{ lineHeight: "38.08000183105469px" }}
-      >
-        Friendly financial clarity for your business
-      </h1>
-
-      <p
-        className="text-[#666b78] font-[Inter] font-normal text-[15px] leading-[24px] w-[400px] h-[48px] box-border"
-        style={{ lineHeight: "24px" }}
-      >
-        We handle bookkeeping, tax filing, and payroll so you can focus on growing your business.
-      </p>
-
-      <section className="w-[341px] h-[74px] flex flex-row gap-[16px]" aria-label="StatsRow">
-        <article className="bg-[#f7f7fa] rounded-[10px] px-[16px] py-[14px] w-[114px] h-[74px] flex flex-col box-border gap-[4px]">
-          <div className="text-[#171a21] font-[Inter] font-bold text-[22px] leading-[26.625px] w-[60px] h-[27px] box-border">
-            500+
+    <div>
+      <header className="bg-[#2e6bde] text-[#171a21]">
+        <nav className="max-w-4xl mx-auto flex items-center justify-between p-[12px]">
+          <div className="flex items-center gap-3">
+            <div aria-label="logo" className="w-[40px] h-[24px] bg-white rounded-full" />
+            <span className="font-[Inter] font-semibold text-[18px]">Figgen Test</span>
           </div>
-          <div className="text-[#80858f] font-[Inter] font-normal text-[12px] leading-[14.5227px] w-[82px] h-[15px] box-border">
-            Clients served
-          </div>
-        </article>
+          <ul className="flex items-center gap-[18px] text-[14px] font-[Inter]">
+            <li><a href="#" className="hover:underline">Home</a></li>
+            <li><a href="#" className="hover:underline">Projects</a></li>
+            <li><a href="#" className="hover:underline">Design</a></li>
+          </ul>
+        </nav>
+      </header>
 
-        <article className="bg-[#f7f7fa] rounded-[10px] px-[16px] py-[14px] w-[96px] h-[74px] flex flex-col box-border gap-[4px]">
-          <div className="text-[#171a21] font-[Inter] font-bold text-[22px] leading-[26.625px] w-[47px] h-[27px] box-border">
-            12yr
-          </div>
-          <div className="text-[#80858f] font-[Inter] font-normal text-[12px] leading-[14.5227px] w-[64px] h-[15px] box-border whitespace-nowrap">
-            In business
-          </div>
-        </article>
+      <main className="text-[#171a21] font-[Inter]">
+        <section className="p-[40px] gap-[24px] flex flex-col" aria-label="Intro">
+          <h1 className="text-[28px] font-semibold">Figgen Test Design</h1>
+          <p className="text-[16px] max-w-prose">
+            This section demonstrates a compact mock of the design using the specified tokens:
+            blue background, dark text, 28px heading, 400px wide cards with soft shadows and
+            pill actions.
+          </p>
 
-        <article className="bg-[#f7f7fa] rounded-[10px] px-[16px] py-[14px] w-[99px] h-[74px] flex flex-col box-border gap-[4px]">
-          <div className="text-[#171a21] font-[Inter] font-bold text-[22px] leading-[26.625px] w-[48px] h-[27px] box-border">
-            98%
+          <div className="flex flex-col md:flex-row gap-[24px]">
+            <article className="w-[400px] bg-white rounded-[16px] shadow-[0px_8px_24px_0px_rgba(0,0,0,0.08)] overflow-hidden">
+              <div aria-label="image-1" className="w-full h-[180px] bg-gray-200" />
+              <div className="p-[16px] flex flex-col gap-[8px]">
+                <h3 className="text-[#171a21] text-[18px] font-semibold">Card Title One</h3>
+                <p className="text-[14px]">Description for the first card showcasing design tokens.</p>
+                <button className="mt-[6px] rounded-[99px] bg-[#2e6bde] text-white px-[12px] py-[6px] w-fit">
+                  Action
+                </button>
+              </div>
+            </article>
+
+            <article className="w-[400px] bg-white rounded-[16px] shadow-[0px_8px_24px_0px_rgba(0,0,0,0.08)] overflow-hidden">
+              <div aria-label="image-2" className="w-full h-[180px] bg-gray-200" />
+              <div className="p-[16px] flex flex-col gap-[8px]">
+                <h3 className="text-[#171a21] text-[18px] font-semibold">Card Title Two</h3>
+                <p className="text-[14px]">Additional context for the second card.</p>
+                <div className="flex items-center gap-2 mt-[4px]">
+                  <div aria-label="icon" className="w-6 h-6 bg-gray-400 rounded" />
+                  <span className="text-[14px] text-[#171a21]">Icon label</span>
+                </div>
+              </div>
+            </article>
           </div>
-          <div className="text-[#80858f] font-[Inter] font-normal text-[12px] leading-[14.5227px] w-[67px] h-[15px] box-border">
-            Satisfaction
-          </div>
-        </article>
-      </section>
-
-      <div className="bg-[#e5e8ed] w-[400px] h-[1px]" aria-label="Divider" />
-
-      <div
-        className="bg-[#2e6bde] rounded-[10px] px-[28px] py-[16px] w-[240px] h-[50px] flex items-center justify-center box-border"
-        aria-label="CTAButton"
-      >
-        <span
-          className="text-white font-[Inter] font-semibold text-[15px] leading-[18.1534px] block"
-          style={{ lineHeight: "18.15340805053711px" }}
-        >
-          Get a free consultation →
-        </span>
-      </div>
-
-      <footer className="text-[#999ea8] font-[Inter] font-normal text-[12px] leading-[14.5227px] w-[400px] h-[15px] flex items-start justify-center box-border">
-        <span style={{ lineHeight: "14.522727012634277px" }}>No credit card required · Cancel anytime</span>
-      </footer>
+        </section>
+      </main>
     </div>
   );
 }
 
-export default FiggenTest;
+export default FiggenTestDesign;

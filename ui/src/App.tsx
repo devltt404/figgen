@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect, useCallback } from "react";
-import type { PipelineEvent, IterationData, DiffIssue } from "./types";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { DiffIssue, IterationData, PipelineEvent } from "./types";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -65,7 +65,10 @@ function IssueList({ issues }: { issues: DiffIssue[] }) {
         <li key={i} className="issue-item">
           <span
             className="issue-tag"
-            style={{ background: CATEGORY_COLORS[issue.category] + "22", color: CATEGORY_COLORS[issue.category] }}
+            style={{
+              background: CATEGORY_COLORS[issue.category] + "22",
+              color: CATEGORY_COLORS[issue.category],
+            }}
           >
             {issue.category}
           </span>
@@ -92,9 +95,14 @@ function IterationCard({
     <div className="iter-card">
       <div className="iter-header">
         <div className="iter-title">
-          <span className="iter-index">{isInitial ? "Initial" : `Refined ×${iter.iteration}`}</span>
+          <span className="iter-index">
+            {isInitial ? "Initial" : `Refined ×${iter.iteration}`}
+          </span>
           {score !== undefined && (
-            <span className="iter-score" style={{ color: fidelityColor(score) }}>
+            <span
+              className="iter-score"
+              style={{ color: fidelityColor(score) }}
+            >
               {(score * 100).toFixed(1)}%
               <span className="iter-score-label">{fidelityLabel(score)}</span>
             </span>
@@ -102,7 +110,8 @@ function IterationCard({
         </div>
         {iter.diff && (
           <span className="iter-issues-count">
-            {iter.diff.issues.length} issue{iter.diff.issues.length !== 1 ? "s" : ""}
+            {iter.diff.issues.length} issue
+            {iter.diff.issues.length !== 1 ? "s" : ""}
           </span>
         )}
       </div>
@@ -118,13 +127,18 @@ function IterationCard({
       {iter.screenshot && !figmaScreenshot && (
         <div className="compare-pane solo">
           <span className="compare-label">Render</span>
-          <img src={`data:image/png;base64,${iter.screenshot}`} alt="Rendered" />
+          <img
+            src={`data:image/png;base64,${iter.screenshot}`}
+            alt="Rendered"
+          />
         </div>
       )}
 
       {iter.diff && (
         <>
-          {iter.diff.summary && <p className="iter-summary">{iter.diff.summary}</p>}
+          {iter.diff.summary && (
+            <p className="iter-summary">{iter.diff.summary}</p>
+          )}
           <IssueList issues={iter.diff.issues} />
         </>
       )}
@@ -139,7 +153,9 @@ function IterationCard({
 type Status = "idle" | "running" | "done" | "error";
 
 export default function App() {
-  const [figmaUrl, setFigmaUrl] = useState("https://www.figma.com/design/hAwRjmZBzB0BFyoWO1YNco/figgen-test?node-id=20-2");
+  const [figmaUrl, setFigmaUrl] = useState(
+    "https://www.figma.com/design/uqQOs5jCjugYd6fUUonoE9/figgen-%E2%80%94-Test-Design?node-id=2-2",
+  );
   const [maxIter, setMaxIter] = useState(3);
   const [status, setStatus] = useState<Status>("idle");
   const [logs, setLogs] = useState<string[]>([]);
@@ -157,53 +173,72 @@ export default function App() {
     setLogs((prev) => [...prev, msg]);
   }, []);
 
-  const handleEvent = useCallback((event: PipelineEvent) => {
-    switch (event.type) {
-      case "log":
-        addLog(event.message);
-        break;
-      case "figma_screenshot":
-        setFigmaScreenshot(event.screenshot);
-        break;
-      case "codegen_done":
-        setComponentName(event.componentName);
-        addLog(`✓ Component: ${event.componentName} (${event.lines} lines)`);
-        break;
-      case "render_done":
-        setIterations((prev) => {
-          const next = [...prev];
-          const existing = next.findIndex((i) => i.iteration === event.iteration);
-          if (existing >= 0) {
-            next[existing] = { ...next[existing], screenshot: event.screenshot };
-          } else {
-            next.push({ iteration: event.iteration, screenshot: event.screenshot });
-          }
-          return next;
-        });
-        break;
-      case "diff_done":
-        setIterations((prev) => {
-          const next = [...prev];
-          const existing = next.findIndex((i) => i.iteration === event.iteration);
-          const diffData = { fidelityScore: event.fidelityScore, issues: event.issues, summary: event.summary };
-          if (existing >= 0) {
-            next[existing] = { ...next[existing], diff: diffData };
-          } else {
-            next.push({ iteration: event.iteration, diff: diffData });
-          }
-          return next;
-        });
-        break;
-      case "done":
-        setStatus("done");
-        addLog(`✓ Done — ${event.iterations} iteration(s)${event.fidelityScore !== null ? `, ${(event.fidelityScore * 100).toFixed(1)}% fidelity` : ""}`);
-        break;
-      case "error":
-        setStatus("error");
-        addLog(`✗ ${event.message}`);
-        break;
-    }
-  }, [addLog]);
+  const handleEvent = useCallback(
+    (event: PipelineEvent) => {
+      switch (event.type) {
+        case "log":
+          addLog(event.message);
+          break;
+        case "figma_screenshot":
+          setFigmaScreenshot(event.screenshot);
+          break;
+        case "codegen_done":
+          setComponentName(event.componentName);
+          addLog(`✓ Component: ${event.componentName} (${event.lines} lines)`);
+          break;
+        case "render_done":
+          setIterations((prev) => {
+            const next = [...prev];
+            const existing = next.findIndex(
+              (i) => i.iteration === event.iteration,
+            );
+            if (existing >= 0) {
+              next[existing] = {
+                ...next[existing],
+                screenshot: event.screenshot,
+              };
+            } else {
+              next.push({
+                iteration: event.iteration,
+                screenshot: event.screenshot,
+              });
+            }
+            return next;
+          });
+          break;
+        case "diff_done":
+          setIterations((prev) => {
+            const next = [...prev];
+            const existing = next.findIndex(
+              (i) => i.iteration === event.iteration,
+            );
+            const diffData = {
+              fidelityScore: event.fidelityScore,
+              issues: event.issues,
+              summary: event.summary,
+            };
+            if (existing >= 0) {
+              next[existing] = { ...next[existing], diff: diffData };
+            } else {
+              next.push({ iteration: event.iteration, diff: diffData });
+            }
+            return next;
+          });
+          break;
+        case "done":
+          setStatus("done");
+          addLog(
+            `✓ Done — ${event.iterations} iteration(s)${event.fidelityScore !== null ? `, ${(event.fidelityScore * 100).toFixed(1)}% fidelity` : ""}`,
+          );
+          break;
+        case "error":
+          setStatus("error");
+          addLog(`✗ ${event.message}`);
+          break;
+      }
+    },
+    [addLog],
+  );
 
   const run = async () => {
     if (!figmaUrl.trim()) return;
@@ -273,7 +308,10 @@ export default function App() {
 
           <form
             className="run-form"
-            onSubmit={(e) => { e.preventDefault(); isRunning ? stop() : run(); }}
+            onSubmit={(e) => {
+              e.preventDefault();
+              isRunning ? stop() : run();
+            }}
           >
             <input
               className="url-input"
@@ -325,7 +363,10 @@ export default function App() {
               <span className="log-empty">Waiting for run…</span>
             )}
             {logs.map((line, i) => (
-              <div key={i} className={`log-line ${line.startsWith("✗") ? "log-line--error" : line.startsWith("✓") ? "log-line--ok" : ""}`}>
+              <div
+                key={i}
+                className={`log-line ${line.startsWith("✗") ? "log-line--error" : line.startsWith("✓") ? "log-line--ok" : ""}`}
+              >
                 <span className="log-prompt">›</span>
                 {line}
               </div>
@@ -339,7 +380,10 @@ export default function App() {
           {status === "idle" && iterations.length === 0 && (
             <div className="empty-state">
               <div className="empty-icon">⇄</div>
-              <p>Paste a Figma URL and hit <strong>Run →</strong> to generate and compare your component.</p>
+              <p>
+                Paste a Figma URL and hit <strong>Run →</strong> to generate and
+                compare your component.
+              </p>
             </div>
           )}
 

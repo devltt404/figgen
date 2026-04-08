@@ -13,6 +13,8 @@
  */
 
 import "dotenv/config";
+import fs from "node:fs/promises";
+import path from "node:path";
 import OpenAI from "openai";
 import type { GeneratedComponent, DiffReport, RefinementResult } from "../types/index.js";
 import { readCache, writeCache } from "../utils/llm-cache.js";
@@ -101,6 +103,8 @@ function stripFences(raw: string): string {
 export async function runRefinement(
   component: GeneratedComponent,
   diff: DiffReport,
+  debugDir?: string,
+  iter = 0,
 ): Promise<RefinementResult> {
   const { client, model, backend } = createClient();
   console.log(`  [Refinement] backend: ${backend} (${model})`);
@@ -146,9 +150,12 @@ Return the fixed TSX.`;
   }
 
   const tsx = stripFences(raw);
-  console.log(
-    `  [Refinement] patched component (${tsx.split("\n").length} lines)`,
-  );
+  console.log(`  [Refinement] patched component (${tsx.split("\n").length} lines)`);
+
+  if (debugDir) {
+    await fs.writeFile(path.join(debugDir, `refine-${iter}-prompt.txt`), userMessage, "utf-8");
+    await fs.writeFile(path.join(debugDir, `refine-${iter}-response.tsx`), tsx, "utf-8");
+  }
 
   return {
     tsx,

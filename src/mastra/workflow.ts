@@ -23,6 +23,7 @@ export const figmaToCodeWorkflow = createWorkflow({
   description: 'Figma-to-code pipeline: Codegen → Write Sandbox',
   inputSchema: z.object({
     figmaUrl: z.string().url(),
+    debugDir: z.string().optional(),
   }),
   outputSchema: z.object({
     outputPath: z.string(),

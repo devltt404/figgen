@@ -28,10 +28,10 @@ const TAILWIND_CONFIG_PATH = path.join(SANDBOX_DIR, 'tailwind.config.ts');
 export const codegenTool = createTool({
   id: 'codegen',
   description: 'Codegen Agent — fetches the Figma design and generates a React TSX component',
-  inputSchema: z.object({ figmaUrl: z.string().url() }),
+  inputSchema: z.object({ figmaUrl: z.string().url(), debugDir: z.string().optional() }),
   outputSchema: GeneratedComponentSchema,
   execute: async (inputData) => {
-    return runCodegen(inputData.figmaUrl);
+    return runCodegen(inputData.figmaUrl, inputData.debugDir);
   },
 });
 
