@@ -30,35 +30,39 @@ function extractComponentName(tsx: string, fallback: string): string {
   return fallback;
 }
 
-async function writeDebug(debugDir: string, filename: string, content: string): Promise<void> {
+async function writeDebug(
+  debugDir: string,
+  filename: string,
+  content: string,
+): Promise<void> {
   await fs.writeFile(path.join(debugDir, filename), content, "utf-8");
 }
 
-const SYSTEM_PROMPT = `You are a Figma-to-code agent.
-Convert the provided Figma design data into a single, self-contained React TSX component.
+const SYSTEM_PROMPT = `
+You are an expert React + Tailwind CSS engineer who converts structured Figma design data into clean, production-ready React + Tailwind CSS components.
 
-The design data comes from the figma-developer-mcp \`get_figma_data\` tool and is structured as YAML with two sections:
+## Input
+
+You receive YAML data exported from a Figma file via the figma-developer-mcp tool. Two main keys relevant for code generation:
+
 - \`nodes\` — the component tree. Each node has a name, type, and refs to layout/fill/style tokens (e.g. layout_ABC, fill_XYZ, style_123).
 - \`globalVars\` — the resolved token definitions. Cross-reference node refs here to get exact values (colors, spacing, font sizes, radii, shadows, etc).
 
-Rules:
-- Output ONLY the raw TSX file content. No explanation, no markdown fences, no comments about what you did.
-- Export the component as a named export. Derive the name from the component name hint provided.
-- Use only Tailwind utility classes. No inline styles, no CSS modules.
+## Output rules
+
+- Produce a single \`.tsx\` file with one default-exported functional component. No explanation, no markdown fences, no comments about what you did.
+- Use Tailwind classes exclusively. No inline styles, no CSS modules, no external libraries beyond React.
 - Resolve every token ref via globalVars and apply as Tailwind arbitrary values:
     colors      → bg-[#2e6bde]  text-[#171a21]
     sizes       → text-[28px]   w-[400px]
     spacing     → p-[40px]      gap-[24px]    px-[12px] py-[6px]
     radius      → rounded-[16px]  rounded-[99px]
     shadows     → shadow-[0px_8px_24px_0px_rgba(0,0,0,0.08)]
-- For font weight: map numeric fontWeight → font-thin(100) font-light(300) font-normal(400) font-medium(500) font-semibold(600) font-bold(700) font-extrabold(800) font-black(900).
-- For font family: use the exact font name from the token.
 - Use semantic HTML: nav, header, main, section, article, footer, button, a, h1-h6, p, ul, li where appropriate.
+- For font family: use the exact font name from the token.
 - The component must render at its natural/intrinsic size matching the design frame. Do NOT add min-h-screen or w-full to the root element.
-- Images: placeholder div with bg-gray-200 and aria-label of the asset name.
-- Icons/vectors: sized gray placeholder div.
 - No interactivity or state unless explicitly visible in the design.
-- No React import needed (React 17+ JSX transform).`;
+`;
 
 export async function runCodegen(
   figmaUrl: string,
@@ -69,33 +73,37 @@ export async function runCodegen(
     throw new Error("No LLM configured. Set REQUESTY_API_KEY.");
   }
 
-  const client = new OpenAI({ baseURL: REQUESTY_BASE_URL, apiKey: requestyKey });
+  const client = new OpenAI({
+    baseURL: REQUESTY_BASE_URL,
+    apiKey: requestyKey,
+  });
   const model = REQUESTY_MODEL;
 
   const { componentName: componentNameHint } = parseFigmaUrl(figmaUrl);
   console.log(`  [Codegen] backend: Requesty (${model})`);
 
   console.log("  [Codegen] fetching design context…");
-  const designContext = await fetchFigmaDesignContext(figmaUrl).catch(() => null);
+  const designContext = await fetchFigmaDesignContext(figmaUrl).catch(
+    () => null,
+  );
 
   if (!designContext) {
     throw new Error("[Codegen] no design data available — terminating process");
   }
   console.log("  [Codegen] design context fetched");
-  if (debugDir) await writeDebug(debugDir, "design-context.txt", designContext.text);
+  if (debugDir)
+    await writeDebug(debugDir, "design-context.txt", designContext.text);
 
   if (process.env.STOP_AFTER_FIGMA === "1") {
-    console.log(`\n  [Debug] --stop-after-figma: design context saved to ${debugDir ?? "."}`);
+    console.log(
+      `\n  [Debug] --stop-after-figma: design context saved to ${debugDir ?? "."}`,
+    );
     process.exit(0);
   }
 
-  const userText = [
-    `Generate a React TSX component named "${componentNameHint}" for this Figma design.`,
-    `Figma URL: ${figmaUrl}`,
-    `\nFIGMA DATA:\n${designContext.text}`,
-  ].join("\n");
+  const userText = [`FIGMA DATA:\n${designContext.text}`].join("\n");
 
-  if (debugDir) await writeDebug(debugDir, "codegen-prompt.txt", userText);
+  if (debugDir) await writeDebug(debugDir, "codegen-prompt.txt", `=== SYSTEM ===\n${SYSTEM_PROMPT}\n\n=== USER ===\n${userText}`);
 
   const cached = await readCache(model, SYSTEM_PROMPT, userText);
   let rawTsx: string;
@@ -121,12 +129,16 @@ export async function runCodegen(
   }
 
   if (!rawTsx.trim()) {
-    throw new Error("Codegen Agent — LLM returned an empty response. Check your API key and try again.");
+    throw new Error(
+      "Codegen Agent — LLM returned an empty response. Check your API key and try again.",
+    );
   }
 
   const tsx = stripFences(rawTsx);
   const componentName = extractComponentName(tsx, componentNameHint);
-  console.log(`  [Codegen] component: ${componentName} (${tsx.split("\n").length} lines)`);
+  console.log(
+    `  [Codegen] component: ${componentName} (${tsx.split("\n").length} lines)`,
+  );
 
   if (debugDir) await writeDebug(debugDir, "codegen-response.tsx", tsx);
 

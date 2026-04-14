@@ -6,10 +6,11 @@
   "type": "module",
   "scripts": {
     "pipeline": "tsx src/pipeline.ts",
-    "server": "tsx src/server.ts",
+    "server": "nodemon --exec tsx src/server.ts --ext ts --ignore sandbox/ --ignore output/ --ignore ui/",
     "ui": "npm run dev --prefix ui",
     "dev": "concurrently -n server,ui -c \"#ea580c,#3b82f6\" \"npm run server\" \"npm run ui\"",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:diff": "tsx scripts/test-diff.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "latest",
@@ -27,6 +28,7 @@
     "@types/express": "^5.0.6",
     "@types/node": "^20.12.12",
     "concurrently": "^9.2.1",
+    "nodemon": "^3.1.0",
     "express": "^5.2.1",
     "ts-node": "^10.9.2",
     "tsx": "^4.21.0",

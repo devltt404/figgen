@@ -38,20 +38,28 @@ function ImageCompare({
   render,
   label,
 }: {
-  figma: string;
-  render: string;
+  figma: string | null;
+  render: string | null;
   label: string;
 }) {
   return (
     <div className="compare-row">
       <div className="compare-pane">
         <span className="compare-label">Figma</span>
-        <img src={`data:image/png;base64,${figma}`} alt="Figma design" />
+        {figma ? (
+          <img src={`data:image/png;base64,${figma}`} alt="Figma design" />
+        ) : (
+          <div className="skeleton-img" />
+        )}
       </div>
       <div className="compare-divider" />
       <div className="compare-pane">
         <span className="compare-label">{label}</span>
-        <img src={`data:image/png;base64,${render}`} alt="Rendered component" />
+        {render ? (
+          <img src={`data:image/png;base64,${render}`} alt="Rendered component" />
+        ) : (
+          <div className="skeleton-img" />
+        )}
       </div>
     </div>
   );
@@ -83,13 +91,16 @@ function IterationCard({
   iter,
   figmaScreenshot,
   index,
+  isLoading,
 }: {
   iter: IterationData;
-  figmaScreenshot: string;
+  figmaScreenshot: string | null;
   index: number;
+  isLoading?: boolean;
 }) {
   const isInitial = iter.iteration === 0;
   const score = iter.diff?.fidelityScore;
+  const showCompare = isLoading || !!iter.screenshot || !!figmaScreenshot;
 
   return (
     <div className="iter-card">
@@ -116,22 +127,12 @@ function IterationCard({
         )}
       </div>
 
-      {iter.screenshot && figmaScreenshot && (
+      {showCompare && (
         <ImageCompare
           figma={figmaScreenshot}
-          render={iter.screenshot}
+          render={iter.screenshot ?? null}
           label={isInitial ? "Initial render" : `Render ×${iter.iteration}`}
         />
-      )}
-
-      {iter.screenshot && !figmaScreenshot && (
-        <div className="compare-pane solo">
-          <span className="compare-label">Render</span>
-          <img
-            src={`data:image/png;base64,${iter.screenshot}`}
-            alt="Rendered"
-          />
-        </div>
       )}
 
       {iter.diff && (
@@ -394,24 +395,24 @@ export default function App() {
             </div>
           )}
 
+          {isRunning && iterations.length === 0 && (
+            <IterationCard
+              iter={{ iteration: 0 }}
+              figmaScreenshot={figmaScreenshot}
+              index={0}
+              isLoading={true}
+            />
+          )}
+
           {iterations.map((iter, idx) => (
             <IterationCard
               key={iter.iteration}
               iter={iter}
-              figmaScreenshot={figmaScreenshot ?? ""}
+              figmaScreenshot={figmaScreenshot}
               index={idx}
+              isLoading={isRunning && !iter.screenshot}
             />
           ))}
-
-          {isRunning && iterations.length === 0 && (
-            <div className="skeleton-card">
-              <div className="skeleton-bar w-40" />
-              <div className="skeleton-images">
-                <div className="skeleton-img" />
-                <div className="skeleton-img" />
-              </div>
-            </div>
-          )}
         </main>
       </div>
     </div>

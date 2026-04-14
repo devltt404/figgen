@@ -34,13 +34,6 @@ export async function saveDebugRun(
   for (const iter of iterations) {
     const label = iter.iteration === 0 ? "render-0-initial" : `render-${iter.iteration}-refined`;
     await writePng(runDir, `${label}.png`, iter.screenshot);
-    if (iter.diff) {
-      await fs.writeFile(
-        path.join(runDir, `diff-${iter.iteration}.json`),
-        JSON.stringify(iter.diff, null, 2),
-        "utf-8",
-      );
-    }
   }
 }
 

@@ -153,7 +153,7 @@ Return the fixed TSX.`;
   console.log(`  [Refinement] patched component (${tsx.split("\n").length} lines)`);
 
   if (debugDir) {
-    await fs.writeFile(path.join(debugDir, `refine-${iter}-prompt.txt`), userMessage, "utf-8");
+    await fs.writeFile(path.join(debugDir, `refine-${iter}-prompt.txt`), `=== SYSTEM ===\n${SYSTEM_PROMPT}\n\n=== USER ===\n${userMessage}`, "utf-8");
     await fs.writeFile(path.join(debugDir, `refine-${iter}-response.tsx`), tsx, "utf-8");
   }
 

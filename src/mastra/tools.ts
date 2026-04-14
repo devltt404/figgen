@@ -4,31 +4,35 @@
  * Each tool wraps one pure agent function with a typed Zod input/output schema.
  */
 
-import { createTool } from '@mastra/core/tools';
-import { z } from 'zod';
-import fs from 'node:fs/promises';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { createTool } from "@mastra/core/tools";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { z } from "zod";
 
-import { GeneratedComponentSchema, DiffReportSchema } from '../types/index.js';
-import { runCodegen } from '../agents/codegen.js';
-import { runRender } from '../agents/render.js';
-import { runDiff } from '../agents/diff.js';
-import { runRefinement } from '../agents/refinement.js';
+import { runCodegen } from "../agents/codegen.js";
+import { runDiff } from "../agents/diff.js";
+import { runRefinement } from "../agents/refinement.js";
+import { runRender } from "../agents/render.js";
+import { DiffReportSchema, GeneratedComponentSchema } from "../types/index.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const SANDBOX_DIR = path.resolve(__dirname, '../../sandbox');
-const COMPONENT_PATH = path.join(SANDBOX_DIR, 'src/GeneratedComponent.tsx');
-const TAILWIND_CONFIG_PATH = path.join(SANDBOX_DIR, 'tailwind.config.ts');
+const SANDBOX_DIR = path.resolve(__dirname, "../../sandbox");
+const COMPONENT_PATH = path.join(SANDBOX_DIR, "src/GeneratedComponent.tsx");
+const TAILWIND_CONFIG_PATH = path.join(SANDBOX_DIR, "tailwind.config.ts");
 
 // ---------------------------------------------------------------------------
 // codegenTool
 // ---------------------------------------------------------------------------
 
 export const codegenTool = createTool({
-  id: 'codegen',
-  description: 'Codegen Agent — fetches the Figma design and generates a React TSX component',
-  inputSchema: z.object({ figmaUrl: z.string().url(), debugDir: z.string().optional() }),
+  id: "codegen",
+  description:
+    "Codegen Agent — fetches the Figma design and generates a React TSX component",
+  inputSchema: z.object({
+    figmaUrl: z.string().url(),
+    debugDir: z.string().optional(),
+  }),
   outputSchema: GeneratedComponentSchema,
   execute: async (inputData) => {
     return runCodegen(inputData.figmaUrl, inputData.debugDir);
@@ -45,17 +49,16 @@ const writeSandboxOutputSchema = z.object({
 });
 
 export const writeSandboxTool = createTool({
-  id: 'write-sandbox',
-  description: 'Writes the generated TSX component to the Vite sandbox for preview',
+  id: "write-sandbox",
+  description:
+    "Writes the generated TSX component to the Vite sandbox for preview",
   inputSchema: GeneratedComponentSchema,
   outputSchema: writeSandboxOutputSchema,
   execute: async (inputData) => {
-    console.log(`  [Sandbox] writing ${inputData.componentName} to ${COMPONENT_PATH}`);
-    // Ensure App.tsx can import it as a default — append if not already present
-    const tsx = inputData.tsx.includes('export default')
-      ? inputData.tsx
-      : `${inputData.tsx}\n\nexport default ${inputData.componentName};\n`;
-    await fs.writeFile(COMPONENT_PATH, tsx, 'utf-8');
+    console.log(
+      `  [Sandbox] writing ${inputData.componentName} to ${COMPONENT_PATH}`,
+    );
+    await fs.writeFile(COMPONENT_PATH, inputData.tsx, "utf-8");
 
     if (inputData.tailwindConfigPatch) {
       await mergeTailwindPatch(inputData.tailwindConfigPatch);
@@ -75,7 +78,7 @@ export const writeSandboxTool = createTool({
 async function mergeTailwindPatch(patch: string): Promise<void> {
   let config: string;
   try {
-    config = await fs.readFile(TAILWIND_CONFIG_PATH, 'utf-8');
+    config = await fs.readFile(TAILWIND_CONFIG_PATH, "utf-8");
   } catch {
     return;
   }
@@ -89,7 +92,7 @@ async function mergeTailwindPatch(patch: string): Promise<void> {
       ? `${existingExtend},\n        ${patch.trim()}`
       : `\n        ${patch.trim()}\n      `;
     const updated = config.replace(extendPattern, `extend: {${newExtend}}`);
-    await fs.writeFile(TAILWIND_CONFIG_PATH, updated, 'utf-8');
+    await fs.writeFile(TAILWIND_CONFIG_PATH, updated, "utf-8");
   }
 }
 
@@ -98,8 +101,9 @@ async function mergeTailwindPatch(patch: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export const renderTool = createTool({
-  id: 'render',
-  description: 'Render Agent — renders the component in a headless browser and returns a screenshot',
+  id: "render",
+  description:
+    "Render Agent — renders the component in a headless browser and returns a screenshot",
   inputSchema: GeneratedComponentSchema,
   outputSchema: z.object({ screenshot: z.string() }),
   execute: async (inputData) => {
@@ -109,8 +113,9 @@ export const renderTool = createTool({
 });
 
 export const diffTool = createTool({
-  id: 'diff',
-  description: 'Diff Agent — compares the Figma design against the rendered output',
+  id: "diff",
+  description:
+    "Diff Agent — compares the Figma design against the rendered output",
   inputSchema: z.object({
     figmaUrl: z.string(),
     screenshot: z.string(),
@@ -122,8 +127,9 @@ export const diffTool = createTool({
 });
 
 export const refinementTool = createTool({
-  id: 'refinement',
-  description: 'Refinement Agent — patches the component to fix visual diff issues',
+  id: "refinement",
+  description:
+    "Refinement Agent — patches the component to fix visual diff issues",
   inputSchema: z.object({
     component: GeneratedComponentSchema,
     diff: DiffReportSchema,

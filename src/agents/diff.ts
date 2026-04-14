@@ -71,6 +71,7 @@ export async function runDiff(
       const response = await client.chat.completions.create({
         model,
         max_tokens: 4096,
+        temperature: 0,
         messages: [
           { role: "system", content: DIFF_SYSTEM_PROMPT },
           {
@@ -121,6 +122,11 @@ export async function runDiff(
   );
 
   if (debugDir) {
+    await fs.writeFile(
+      path.join(debugDir, `diff-${iter}-prompt.txt`),
+      `=== SYSTEM ===\n${DIFF_SYSTEM_PROMPT}\n\n=== USER ===\nCompare these two screenshots and return the JSON diff report.\n[figma screenshot: base64 PNG]\n[rendered screenshot: base64 PNG]`,
+      "utf-8",
+    );
     await fs.writeFile(
       path.join(debugDir, `diff-${iter}-response.json`),
       JSON.stringify(report, null, 2),

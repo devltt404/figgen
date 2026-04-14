@@ -12,7 +12,7 @@ import { runRender } from "./agents/render.js";
 import { runDiff } from "./agents/diff.js";
 import { runRefinement } from "./agents/refinement.js";
 import { fetchFigmaScreenshot, getFigmaNodeSize } from "./utils/figma.js";
-import { saveDebugRun, type IterationArtifacts } from "./utils/debug.js";
+import { createRunDir, saveDebugRun, type IterationArtifacts } from "./utils/debug.js";
 import type { GeneratedComponent, DiffIssue } from "./types/index.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -71,6 +71,8 @@ export async function runPipeline(
   emit({ type: "log", message: `URL: ${figmaUrl}` });
   emit({ type: "log", message: `Max iterations: ${maxIter}` });
 
+  const runDir = await createRunDir();
+
   // -------------------------------------------------------------------------
   // Phase 1: Codegen
   // -------------------------------------------------------------------------
@@ -97,7 +99,7 @@ export async function runPipeline(
     const run = await workflow.createRun();
     let result: Awaited<ReturnType<typeof run.start>>;
     try {
-      result = await run.start({ inputData: { figmaUrl } });
+      result = await run.start({ inputData: { figmaUrl, debugDir: runDir } });
     } catch (err) {
       emit({ type: "error", message: `Codegen failed: ${String(err)}` });
       return;
@@ -164,7 +166,7 @@ export async function runPipeline(
     emit({ type: "log", message: `Running diff ${iteration}…` });
     let diffReport: Awaited<ReturnType<typeof runDiff>>;
     try {
-      diffReport = await runDiff(figmaUrl, renderedScreenshot);
+      diffReport = await runDiff(figmaUrl, renderedScreenshot, runDir, iteration);
       const pct = (diffReport.fidelityScore * 100).toFixed(1);
       emit({ type: "log", message: `Diff ${iteration} — fidelity: ${pct}% — ${diffReport.issues.length} issue(s)` });
       emit({ type: "diff_done", iteration, fidelityScore: diffReport.fidelityScore, issues: diffReport.issues, summary: diffReport.summary });
@@ -186,7 +188,7 @@ export async function runPipeline(
     emit({ type: "log", message: `Refining iteration ${iteration}…` });
     let refined: Awaited<ReturnType<typeof runRefinement>>;
     try {
-      refined = await runRefinement(currentComponent, diffReport);
+      refined = await runRefinement(currentComponent, diffReport, runDir, iteration);
       emit({ type: "log", message: `Refine ${iteration} done — ${refined.patchSummary}` });
       emit({ type: "refine_done", iteration });
     } catch (err) {
@@ -204,7 +206,7 @@ export async function runPipeline(
   }
 
   try {
-    await saveDebugRun(figmaScreenshot, debugIterations);
+    await saveDebugRun(runDir, figmaScreenshot, debugIterations);
   } catch {}
 
   const finalDiff = debugIterations.at(-1)?.diff;
