@@ -1,14 +1,20 @@
+/**
+ * Codegen Agent — src/agents/codegen.ts
+ *
+ * Unified agent that handles both initial code generation and refinement.
+ * - Generation mode: receives Figma data, produces React TSX
+ * - Refinement mode: receives existing TSX + DiffReport, applies surgical fixes
+ *
+ * Both modes optionally incorporate long-term design guidelines from memory.
+ */
+
 import "dotenv/config";
 import fs from "node:fs/promises";
 import path from "node:path";
-import OpenAI from "openai";
-import type { GeneratedComponent } from "../types/index.js";
+import type { GeneratedComponent, DiffReport } from "../types/index.js";
 import { fetchFigmaDesignContext, parseFigmaUrl } from "../utils/figma.js";
 import { readCache, writeCache } from "../utils/llm-cache.js";
-
-const REQUESTY_BASE_URL = "https://router.requesty.ai/v1";
-const REQUESTY_MODEL =
-  process.env.REQUESTY_MODEL ?? "openai-responses/gpt-5.4-nano";
+import { createLLMClient } from "../utils/llm-client.js";
 
 function stripFences(raw: string): string {
   return raw
@@ -38,15 +44,27 @@ async function writeDebug(
   await fs.writeFile(path.join(debugDir, filename), content, "utf-8");
 }
 
+// ---------------------------------------------------------------------------
+// System prompt — covers both generation and refinement modes
+// ---------------------------------------------------------------------------
+
 const SYSTEM_PROMPT = `
 You are an expert React + Tailwind CSS engineer who converts structured Figma design data into clean, production-ready React + Tailwind CSS components.
 
-## Input
+## Generation mode
 
 You receive YAML data exported from a Figma file via the figma-developer-mcp tool. Two main keys relevant for code generation:
 
 - \`nodes\` — the component tree. Each node has a name, type, and refs to layout/fill/style tokens (e.g. layout_ABC, fill_XYZ, style_123).
 - \`globalVars\` — the resolved token definitions. Cross-reference node refs here to get exact values (colors, spacing, font sizes, radii, shadows, etc).
+
+## Refinement mode
+
+When you receive existing TSX code along with a diff report of visual issues, apply minimal, surgical fixes to resolve each issue.
+- Do NOT rewrite the whole component — make targeted changes only.
+- Keep all existing Tailwind classes that are correct; only change what the issues describe.
+- NEVER change colors, fonts, or content that are not explicitly mentioned in the issues list.
+- Preserve the component's named export exactly.
 
 ## Output rules
 
@@ -64,68 +82,117 @@ You receive YAML data exported from a Figma file via the figma-developer-mcp too
 - No interactivity or state unless explicitly visible in the design.
 `;
 
+// ---------------------------------------------------------------------------
+// Public interface
+// ---------------------------------------------------------------------------
+
+export interface CodegenOptions {
+  existingComponent?: GeneratedComponent;
+  diffReport?: DiffReport;
+  guidelines?: string[];
+  debugDir?: string;
+  iter?: number;
+}
+
+function formatIssues(diff: DiffReport): string {
+  return diff.issues
+    .map((issue, i) => `${i + 1}. [${issue.category}] ${issue.description}`)
+    .join("\n\n");
+}
+
+function buildSystemPrompt(guidelines?: string[]): string {
+  if (!guidelines || guidelines.length === 0) return SYSTEM_PROMPT;
+  const bulletPoints = guidelines.map((g) => `- ${g}`).join("\n");
+  return `${SYSTEM_PROMPT}
+## Design Guidelines (from prior sessions — follow strictly)
+
+${bulletPoints}
+`;
+}
+
 export async function runCodegen(
   figmaUrl: string,
-  debugDir?: string,
+  options: CodegenOptions = {},
 ): Promise<GeneratedComponent> {
-  const requestyKey = process.env.REQUESTY_API_KEY;
-  if (!requestyKey) {
-    throw new Error("No LLM configured. Set REQUESTY_API_KEY.");
-  }
+  const { existingComponent, diffReport, guidelines, debugDir, iter } = options;
+  const isRefinement = !!(existingComponent && diffReport);
 
-  const client = new OpenAI({
-    baseURL: REQUESTY_BASE_URL,
-    apiKey: requestyKey,
-  });
-  const model = REQUESTY_MODEL;
+  const { client, model, provider } = createLLMClient();
 
   const { componentName: componentNameHint } = parseFigmaUrl(figmaUrl);
-  console.log(`  [Codegen] backend: Requesty (${model})`);
+  const mode = isRefinement ? "refine" : "generate";
+  console.log(`  [Codegen] mode: ${mode} | backend: ${provider} (${model})`);
 
-  console.log("  [Codegen] fetching design context…");
-  const designContext = await fetchFigmaDesignContext(figmaUrl).catch(
-    () => null,
-  );
+  // Build system prompt with guidelines
+  const systemPrompt = buildSystemPrompt(guidelines);
 
-  if (!designContext) {
-    throw new Error("[Codegen] no design data available — terminating process");
-  }
-  console.log("  [Codegen] design context fetched");
-  if (debugDir)
-    await writeDebug(debugDir, "design-context.txt", designContext.text);
+  // Build user message depending on mode
+  let userText: string;
 
-  if (process.env.STOP_AFTER_FIGMA === "1") {
-    console.log(
-      `\n  [Debug] --stop-after-figma: design context saved to ${debugDir ?? "."}`,
+  if (isRefinement) {
+    userText = `Current fidelity score: ${(diffReport.fidelityScore * 100).toFixed(1)}%
+Summary: ${diffReport.summary}
+
+Issues to fix:
+${formatIssues(diffReport)}
+
+Current TSX:
+\`\`\`tsx
+${existingComponent.tsx}
+\`\`\`
+
+Return the fixed TSX.`;
+  } else {
+    console.log("  [Codegen] fetching design context…");
+    const designContext = await fetchFigmaDesignContext(figmaUrl).catch(
+      () => null,
     );
-    process.exit(0);
+
+    if (!designContext) {
+      throw new Error("[Codegen] no design data available — terminating process");
+    }
+    console.log("  [Codegen] design context fetched");
+    if (debugDir)
+      await writeDebug(debugDir, "design-context.txt", designContext.text);
+
+    if (process.env.STOP_AFTER_FIGMA === "1") {
+      console.log(
+        `\n  [Debug] --stop-after-figma: design context saved to ${debugDir ?? "."}`,
+      );
+      process.exit(0);
+    }
+
+    userText = `FIGMA DATA:\n${designContext.text}`;
   }
 
-  const userText = [`FIGMA DATA:\n${designContext.text}`].join("\n");
+  // Debug artifacts
+  const iterSuffix = iter != null ? `-${iter}` : "";
+  const debugPrefix = isRefinement ? `refine${iterSuffix}` : "codegen";
+  if (debugDir)
+    await writeDebug(debugDir, `${debugPrefix}-prompt.txt`, `=== SYSTEM ===\n${systemPrompt}\n\n=== USER ===\n${userText}`);
 
-  if (debugDir) await writeDebug(debugDir, "codegen-prompt.txt", `=== SYSTEM ===\n${SYSTEM_PROMPT}\n\n=== USER ===\n${userText}`);
-
-  const cached = await readCache(model, SYSTEM_PROMPT, userText);
+  // LLM call (with cache)
+  const cached = await readCache(model, systemPrompt, userText);
   let rawTsx: string;
   if (cached) {
-    console.log("  [Codegen] cache hit — skipping LLM call");
+    console.log(`  [Codegen] cache hit — skipping LLM call`);
     rawTsx = cached;
   } else {
     console.log("  [Codegen] calling LLM…");
     try {
       const response = await client.chat.completions.create({
         model,
-        max_tokens: 4096,
+        max_completion_tokens: 4096,
         messages: [
-          { role: "system", content: SYSTEM_PROMPT },
+          { role: "system", content: systemPrompt },
           { role: "user", content: userText },
         ],
       });
       rawTsx = response.choices[0]?.message?.content ?? "";
     } catch (err) {
-      throw new Error(`Codegen Agent — Requesty call failed: ${String(err)}`);
+      throw new Error(`Codegen Agent — ${provider} call failed: ${String(err)}`);
     }
-    await writeCache(model, SYSTEM_PROMPT, userText, rawTsx);
+    await writeCache(model, systemPrompt, userText, rawTsx);
   }
 
   if (!rawTsx.trim()) {
@@ -135,17 +202,25 @@ export async function runCodegen(
   }
 
   const tsx = stripFences(rawTsx);
-  const componentName = extractComponentName(tsx, componentNameHint);
+  const componentName = extractComponentName(
+    tsx,
+    existingComponent?.componentName ?? componentNameHint,
+  );
   console.log(
     `  [Codegen] component: ${componentName} (${tsx.split("\n").length} lines)`,
   );
 
-  if (debugDir) await writeDebug(debugDir, "codegen-response.tsx", tsx);
+  if (debugDir) await writeDebug(debugDir, `${debugPrefix}-response.tsx`, tsx);
 
   return {
     tsx,
     componentName,
-    dependencies: ["react"],
-    tailwindConfigPatch: null,
+    dependencies: existingComponent?.dependencies ?? ["react"],
+    tailwindConfigPatch: existingComponent?.tailwindConfigPatch ?? null,
+    ...(isRefinement && diffReport
+      ? {
+          patchSummary: `Fixed ${diffReport.issues.length} issue(s): ${diffReport.issues.map((i) => i.category).join(", ")}`,
+        }
+      : {}),
   };
 }

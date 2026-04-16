@@ -6,13 +6,9 @@
 import { Mastra } from '@mastra/core';
 
 import { figmaToCodeWorkflow } from './workflow.js';
-import {
-  codegenAgent,
-  writeSandboxAgent,
-  // PHASE 2: renderAgent, diffAgent, refinementAgent
-} from './agents.js';
+import { codegenAgent, judgeAgent } from './agents.js';
 
 export const mastra = new Mastra({
   workflows: { figmaToCodeWorkflow },
-  agents: { codegenAgent, writeSandboxAgent },
+  agents: { codegenAgent, judgeAgent },
 });

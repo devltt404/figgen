@@ -6,10 +6,10 @@ export interface DiffIssue {
 export type PipelineEvent =
   | { type: "log"; message: string }
   | { type: "figma_screenshot"; screenshot: string }
-  | { type: "codegen_done"; componentName: string; lines: number; tsx: string }
+  | { type: "codegen_done"; componentName: string; lines: number; tsx: string; mode: "generate" | "refine" }
   | { type: "render_done"; iteration: number; screenshot: string }
-  | { type: "diff_done"; iteration: number; fidelityScore: number; issues: DiffIssue[]; summary: string }
-  | { type: "refine_done"; iteration: number }
+  | { type: "judge_done"; iteration: number; fidelityScore: number; issues: DiffIssue[]; summary: string }
+  | { type: "memory_updated"; guidelinesCount: number }
   | { type: "done"; componentName: string; iterations: number; fidelityScore: number | null }
   | { type: "error"; message: string };
 

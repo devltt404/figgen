@@ -11,8 +11,7 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 
 import { runCodegen } from "../agents/codegen.js";
-import { runDiff } from "../agents/diff.js";
-import { runRefinement } from "../agents/refinement.js";
+import { runJudge } from "../agents/judge.js";
 import { runRender } from "../agents/render.js";
 import { DiffReportSchema, GeneratedComponentSchema } from "../types/index.js";
 
@@ -22,20 +21,30 @@ const COMPONENT_PATH = path.join(SANDBOX_DIR, "src/GeneratedComponent.tsx");
 const TAILWIND_CONFIG_PATH = path.join(SANDBOX_DIR, "tailwind.config.ts");
 
 // ---------------------------------------------------------------------------
-// codegenTool
+// codegenTool (handles both generation and refinement modes)
 // ---------------------------------------------------------------------------
 
 export const codegenTool = createTool({
   id: "codegen",
   description:
-    "Codegen Agent — fetches the Figma design and generates a React TSX component",
+    "Codegen Agent — generates or refines a React TSX component from Figma design data",
   inputSchema: z.object({
     figmaUrl: z.string().url(),
+    existingComponent: GeneratedComponentSchema.optional(),
+    diffReport: DiffReportSchema.optional(),
+    guidelines: z.array(z.string()).optional(),
     debugDir: z.string().optional(),
+    iter: z.number().optional(),
   }),
   outputSchema: GeneratedComponentSchema,
   execute: async (inputData) => {
-    return runCodegen(inputData.figmaUrl, inputData.debugDir);
+    return runCodegen(inputData.figmaUrl, {
+      existingComponent: inputData.existingComponent,
+      diffReport: inputData.diffReport,
+      guidelines: inputData.guidelines,
+      debugDir: inputData.debugDir,
+      iter: inputData.iter,
+    });
   },
 });
 
@@ -97,13 +106,13 @@ async function mergeTailwindPatch(patch: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 2 tool stubs
+// renderTool (utility, not an LLM agent)
 // ---------------------------------------------------------------------------
 
 export const renderTool = createTool({
   id: "render",
   description:
-    "Render Agent — renders the component in a headless browser and returns a screenshot",
+    "Render tool — renders the component in a headless browser and returns a screenshot",
   inputSchema: GeneratedComponentSchema,
   outputSchema: z.object({ screenshot: z.string() }),
   execute: async (inputData) => {
@@ -112,30 +121,20 @@ export const renderTool = createTool({
   },
 });
 
-export const diffTool = createTool({
-  id: "diff",
+// ---------------------------------------------------------------------------
+// judgeTool
+// ---------------------------------------------------------------------------
+
+export const judgeTool = createTool({
+  id: "judge",
   description:
-    "Diff Agent — compares the Figma design against the rendered output",
+    "Judge Agent — compares the Figma design against the rendered output",
   inputSchema: z.object({
     figmaUrl: z.string(),
     screenshot: z.string(),
   }),
   outputSchema: DiffReportSchema,
   execute: async (inputData) => {
-    return runDiff(inputData.figmaUrl, inputData.screenshot);
-  },
-});
-
-export const refinementTool = createTool({
-  id: "refinement",
-  description:
-    "Refinement Agent — patches the component to fix visual diff issues",
-  inputSchema: z.object({
-    component: GeneratedComponentSchema,
-    diff: DiffReportSchema,
-  }),
-  outputSchema: z.object({}),
-  execute: async (inputData) => {
-    return runRefinement(inputData.component, inputData.diff);
+    return runJudge(inputData.figmaUrl, inputData.screenshot);
   },
 });

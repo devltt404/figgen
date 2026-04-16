@@ -207,7 +207,7 @@ export default function App() {
             return next;
           });
           break;
-        case "diff_done":
+        case "judge_done":
           setIterations((prev) => {
             const next = [...prev];
             const existing = next.findIndex(
@@ -225,6 +225,9 @@ export default function App() {
             }
             return next;
           });
+          break;
+        case "memory_updated":
+          addLog(`✓ Saved ${event.guidelinesCount} new design guideline(s) to memory`);
           break;
         case "done":
           setStatus("done");

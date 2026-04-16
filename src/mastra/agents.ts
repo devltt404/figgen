@@ -1,6 +1,6 @@
 /**
  * src/mastra/agents.ts
- * Mastra Agent instances — one per agent function.
+ * Mastra Agent instances — two agents + render tool.
  */
 
 import { Agent } from '@mastra/core/agent';
@@ -16,75 +16,51 @@ const agentModel = (() => {
     const model = process.env.OPENROUTER_MODEL ?? 'qwen/qwen3-coder:free';
     return createOpenAI({ baseURL: 'https://openrouter.ai/api/v1', apiKey: process.env.OPENROUTER_API_KEY })(model);
   }
+  if (process.env.OPENAI_API_KEY) {
+    return openai(process.env.OPENAI_MODEL ?? 'gpt-5.4-nano');
+  }
   if (process.env.OLLAMA_MODEL) {
     return createOllama({ baseURL: process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434/api' })(process.env.OLLAMA_MODEL);
   }
-  return openai('gpt-4o');
+  throw new Error('No LLM configured. Set one of: REQUESTY_API_KEY, OPENROUTER_API_KEY, OPENAI_API_KEY, or OLLAMA_MODEL.');
 })();
 
 import {
   codegenTool,
   writeSandboxTool,
   renderTool,
-  diffTool,
-  refinementTool,
+  judgeTool,
 } from './tools.js';
 
 // ---------------------------------------------------------------------------
-// Phase 1 agents
+// Codegen Agent — handles both generation and refinement
 // ---------------------------------------------------------------------------
 
 export const codegenAgent = new Agent({
   id: 'codegen-agent',
   name: 'Codegen Agent',
   instructions:
-    'You are the Codegen Agent. You receive a Figma URL, fetch the design screenshot, ' +
-    'and generate a production-quality React TSX component. ' +
-    'Follow Tailwind conventions strictly. Output only valid TSX.',
+    'You are the Codegen Agent. You receive a Figma URL, fetch the design data, ' +
+    'and generate a production-quality React TSX component using Tailwind CSS. ' +
+    'In refinement mode, you receive existing TSX code and a diff report, and apply ' +
+    'minimal surgical fixes to resolve visual issues. ' +
+    'Follow design guidelines from long-term memory when provided.',
   model: agentModel,
-  tools: { codegenTool },
-});
-
-export const writeSandboxAgent = new Agent({
-  id: 'write-sandbox-agent',
-  name: 'Write Sandbox Agent',
-  instructions:
-    'You are the Write Sandbox Agent. You write generated component files ' +
-    'to the Vite sandbox directory so they can be previewed in the browser.',
-  model: agentModel,
-  tools: { writeSandboxTool },
+  tools: { codegenTool, writeSandboxTool },
 });
 
 // ---------------------------------------------------------------------------
-// Phase 2 agent stubs
+// Judge Agent — visual fidelity review + guideline extraction
 // ---------------------------------------------------------------------------
 
-export const renderAgent = new Agent({
-  id: 'render-agent',
-  name: 'Render Agent',
+export const judgeAgent = new Agent({
+  id: 'judge-agent',
+  name: 'Judge Agent',
   instructions:
-    'You are the Render Agent. You write the generated component to the ' +
-    'sandbox and capture a screenshot using a headless browser.',
+    'You are the Judge Agent. You compare the original Figma design against ' +
+    'the rendered component screenshot and return a structured fidelity report. ' +
+    'After successful sessions, you extract generalizable design guidelines ' +
+    'and save them to long-term memory for future sessions.',
   model: agentModel,
-  tools: { renderTool },
-});
-
-export const diffAgent = new Agent({
-  id: 'diff-agent',
-  name: 'Diff Agent',
-  instructions:
-    'You are the Diff Agent. You compare the original Figma design against ' +
-    'the rendered component screenshot and return a structured DiffReport.',
-  model: agentModel,
-  tools: { diffTool },
-});
-
-export const refinementAgent = new Agent({
-  id: 'refinement-agent',
-  name: 'Refinement Agent',
-  instructions:
-    'You are the Refinement Agent. You apply targeted code patches to fix ' +
-    'visual discrepancies identified by the Diff Agent.',
-  model: agentModel,
-  tools: { refinementTool },
+  tools: { judgeTool, renderTool },
 });

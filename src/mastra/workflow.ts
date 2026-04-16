@@ -1,5 +1,9 @@
 /**
- * The Mastra workflow orchestrator — wires all agents in a sequential pipeline.
+ * The Mastra workflow orchestrator.
+ *
+ * The main pipeline loop (codegen ↔ judge) is now driven directly by
+ * pipeline.ts / pipeline-runner.ts. This workflow is kept for Mastra
+ * dashboard observability of the initial codegen + write-sandbox step.
  */
 
 import { createWorkflow, createStep } from '@mastra/core/workflows';
@@ -8,14 +12,14 @@ import { z } from 'zod';
 import { codegenTool, writeSandboxTool } from './tools.js';
 
 // ---------------------------------------------------------------------------
-// Workflow steps (each wraps one tool)
+// Workflow steps
 // ---------------------------------------------------------------------------
 
 const codegenStep = createStep(codegenTool);
 const writeSandboxStep = createStep(writeSandboxTool);
 
 // ---------------------------------------------------------------------------
-// figma-to-code workflow
+// figma-to-code workflow (initial generation only)
 // ---------------------------------------------------------------------------
 
 export const figmaToCodeWorkflow = createWorkflow({
@@ -33,23 +37,3 @@ export const figmaToCodeWorkflow = createWorkflow({
   .then(codegenStep)
   .then(writeSandboxStep)
   .commit();
-
-// ---------------------------------------------------------------------------
-// PHASE 2: Visual comparison and refinement loop
-// Uncomment and implement when Phase 2 begins.
-//
-// import { renderTool, diffTool, refinementTool } from './tools.js';
-//
-// const renderStep       = createStep(renderTool);
-// const diffStep         = createStep(diffTool);
-// const refinementStep   = createStep(refinementTool);
-//
-// The Phase 2 workflow will extend this pipeline:
-//
-//   .then(renderStep)          -- screenshot the rendered component
-//   .then(diffStep)            -- compare Figma design vs rendered output
-//   .branch([                  -- loop until score >= 0.95 or 3 iterations
-//     [diffScoreOk,  finalizeStep],
-//     [needsRefine,  refinementStep → loop back to renderStep],
-//   ])
-// ---------------------------------------------------------------------------

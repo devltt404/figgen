@@ -1,25 +1,43 @@
 # figgen — Figma-to-code multi-agent system
 
-A multi-agent pipeline that converts a Figma design URL into a production-quality React + Tailwind component. Built with Mastra AI, GPT-4o, and the official Figma MCP server.
+A multi-agent pipeline that converts a Figma design URL into a production-quality React + Tailwind component. Built with Mastra AI, GPT-4o vision, and the official Figma MCP server.
 
-## System overview
+## Architecture
 
-Each agent is a pure async function with a single responsibility. Agents communicate through typed message contracts and know nothing about each other — only the Mastra orchestrator knows the full pipeline.
+Two LLM agents and one render tool operate in a loop:
 
-| Agent | File | Responsibility |
+| Component | File | Role |
 |---|---|---|
-| **Ingestion Agent** | `src/agents/ingestion.ts` | Fetches Figma design data via MCP, parses the node tree, extracts design tokens and a screenshot |
-| **Codegen Agent** | `src/agents/codegen.ts` | Receives FigmaContext, calls GPT-4o with the node tree + screenshot, returns production-quality TSX |
-| **Render Agent** *(Phase 2)* | `src/agents/render.ts` | Writes TSX to sandbox, screenshots it with Playwright headless browser |
-| **Diff Agent** *(Phase 2)* | `src/agents/diff.ts` | Pixel-diffs + GPT-4o vision-diffs the Figma screenshot vs rendered output |
-| **Refinement Agent** *(Phase 2)* | `src/agents/refinement.ts` | Applies targeted code patches to fix visual discrepancies |
+| **Codegen Agent** | `src/agents/codegen.ts` | Generates React TSX from Figma data (generation mode) or applies surgical fixes based on a diff report (refinement mode). Reads long-term design guidelines from memory before each run. |
+| **Judge Agent** | `src/agents/judge.ts` | Compares Figma screenshot vs rendered component using vision LLM. Returns a fidelity score (0–1) and categorized issues. After a successful session, extracts generalizable design guidelines and saves them to long-term memory. |
+| **Render Tool** | `src/agents/render.ts` | Screenshots the generated component in a headless Chromium browser at the exact Figma frame dimensions. Not an LLM agent. |
+
+### Pipeline flow
+
+```
+Read guidelines from memory
+  │
+  ▼
+Codegen (generate) → Write Sandbox → Render → Judge
+                                        ▲        │
+                                        │        ▼
+                                   Write Sandbox ← Codegen (refine) ◄── if fidelity < 95%
+                                                                          (max 3 iterations)
+  │
+  ▼  (on success)
+Judge extracts guidelines → Save to memory
+```
+
+### Long-term memory
+
+Design guidelines accumulate across sessions in `output/memory/guidelines.json`. The Judge agent writes them; the Codegen agent reads them. Over time the system generates better first-pass code without retraining. Capacity is capped at 30 guidelines with hitCount-based eviction.
 
 ## Prerequisites
 
 - **Node.js 20+**
-- **OpenAI API key** — [platform.openai.com](https://platform.openai.com)
 - **Figma Personal Access Token** — requires a Dev or Full seat
   - Figma → Settings → Security → Personal Access Tokens
+- **LLM API key** — at least one of: Requesty (recommended), OpenRouter, OpenAI, or local Ollama
 
 ## Setup
 
@@ -30,84 +48,105 @@ npm install
 # 2. Install sandbox dependencies
 cd sandbox && npm install && cd ..
 
-# 3. Configure environment variables
+# 3. Install UI dependencies
+cd ui && npm install && cd ..
+
+# 4. Install Playwright browser
+npx playwright install chromium
+
+# 5. Configure environment variables
 cp .env.example .env
 # Edit .env and fill in your keys
 ```
 
-## Running the pipeline
+## Running the project
+
+### Option A: Web UI (recommended)
 
 ```bash
-npx ts-node src/pipeline.ts "YOUR_FIGMA_URL"
+npm run dev
 ```
 
-Example:
+This starts both the API server (port 4111) and the React UI concurrently. Open the URL printed in the terminal, paste a Figma frame URL, and click **Run →**.
+
+### Option B: CLI
+
 ```bash
-npx ts-node src/pipeline.ts "https://www.figma.com/design/abc123/MyDesign?node-id=1-2"
+npm run pipeline "https://www.figma.com/design/abc123/MyDesign?node-id=1-2"
 ```
 
-The pipeline will:
-1. Fetch the Figma frame data via the Figma MCP server
-2. Extract the node tree, design tokens, and a screenshot
-3. Call GPT-4o to generate a React TSX component
-4. Write the component to `sandbox/src/GeneratedComponent.tsx`
+CLI flags:
+- `--max-iter N` — max refinement iterations (default: 3, use 0 to skip the render/judge loop)
+- `--skip-codegen` — skip generation and use the existing `sandbox/src/GeneratedComponent.tsx`
+- `--stop-after-figma` — fetch Figma data and save to debug dir, then exit
 
-Then preview it:
+### Option C: Individual services
+
 ```bash
-cd sandbox && npm run dev
-# Open http://localhost:5173
+npm run server                       # API server only (port 4111)
+npm run ui                           # React UI only
+cd sandbox && npm run dev            # Sandbox preview (port 5173)
 ```
+
+## Available scripts
+
+| Script | Description |
+|--------|-------------|
+| `npm run dev` | Start server + UI concurrently |
+| `npm run server` | HTTP server with SSE endpoint (`/api/run`) |
+| `npm run ui` | React web UI |
+| `npm run pipeline "URL"` | CLI pipeline entry point |
+| `npm run typecheck` | TypeScript type checking |
+| `npm run test:diff` | Test the judge agent with saved debug artifacts |
+
+## Environment variables
+
+Set in `.env` (see `.env.example`):
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `REQUESTY_API_KEY` | One LLM key required | Requesty API key (recommended) |
+| `REQUESTY_MODEL` | No | Model override (default: `openai-responses/gpt-5.4-nano`) |
+| `REQUESTY_DIFF_MODEL` | No | Separate model for Judge agent (default: `openai/gpt-4o`) |
+| `OPENROUTER_API_KEY` | Alt | OpenRouter API key |
+| `OPENAI_API_KEY` | Alt | OpenAI API key |
+| `OLLAMA_MODEL` | Alt | Ollama model name for local inference |
+| `FIGMA_ACCESS_TOKEN` | Yes | Figma personal access token |
+| `SERVER_PORT` | No | Server port (default: 4111) |
+| `SANDBOX_URL` | No | Sandbox URL (default: `http://localhost:5173`) |
 
 ## Project structure
 
 ```
 figgen/
 ├── src/
-│   ├── types/
-│   │   └── index.ts              # Shared Zod schemas + TypeScript types for all agent messages
-│   ├── utils/
-│   │   ├── figma-parser.ts       # Raw Figma MCP response → typed FigmaNode tree
-│   │   └── token-mapper.ts       # FigmaNode tree → DesignTokens (colors, spacing, etc.)
 │   ├── agents/
-│   │   ├── ingestion.ts          # Ingestion Agent — pure function, no framework imports
-│   │   ├── codegen.ts            # Codegen Agent — pure function, calls GPT-4o directly
-│   │   ├── render.ts             # Render Agent stub (Phase 2)
-│   │   ├── diff.ts               # Diff Agent stub (Phase 2)
-│   │   └── refinement.ts         # Refinement Agent stub (Phase 2)
+│   │   ├── codegen.ts              # Codegen Agent — generation + refinement
+│   │   ├── judge.ts                # Judge Agent — fidelity scoring + guideline extraction
+│   │   └── render.ts               # Render tool — Playwright screenshots
+│   ├── types/
+│   │   └── index.ts                # Zod schemas (GeneratedComponent, DiffReport, Guideline)
+│   ├── utils/
+│   │   ├── figma.ts                # Figma MCP + REST API integration with caching
+│   │   ├── llm-cache.ts            # File-based LLM response cache
+│   │   ├── memory.ts               # Long-term guideline memory (read/write/evict)
+│   │   └── debug.ts                # Debug run directory & artifact management
 │   ├── mastra/
-│   │   ├── tools.ts              # createTool wrappers — bridge between orchestrator and agents
-│   │   ├── agents.ts             # Mastra Agent instances with instructions + model
-│   │   ├── workflow.ts           # Mastra workflow — sequential pipeline orchestration
-│   │   └── index.ts              # Mastra instance export
-│   └── pipeline.ts               # CLI entry point
-├── sandbox/
-│   ├── src/
-│   │   ├── GeneratedComponent.tsx  # Written by the pipeline on each run
-│   │   ├── App.tsx                 # Renders GeneratedComponent centered on screen
-│   │   ├── main.tsx                # React root
-│   │   └── index.css               # Tailwind directives
-│   ├── index.html
-│   ├── vite.config.ts            # Vite dev server on port 5173
-│   ├── tailwind.config.ts        # Tailwind config (extend block patched per run)
-│   └── package.json              # Standalone — works independently of the pipeline
-├── output/                       # Reserved for future output artifacts
-├── .env.example                  # Environment variable template
-├── package.json
-└── tsconfig.json
+│   │   ├── agents.ts               # Mastra Agent instances
+│   │   ├── tools.ts                # Mastra Tool wrappers
+│   │   ├── workflow.ts             # Mastra workflow (codegen → write sandbox)
+│   │   └── index.ts                # Mastra instance export
+│   ├── pipeline.ts                 # CLI entry point
+│   ├── pipeline-runner.ts          # Event-emitting pipeline (used by server)
+│   └── server.ts                   # HTTP server with SSE streaming
+├── sandbox/                        # Isolated Vite React app for component preview
+├── ui/                             # React web UI for pipeline control
+├── scripts/
+│   └── test-diff.ts                # Standalone judge prompt testing
+├── output/                         # Generated at runtime
+│   ├── debug/                      # Timestamped run directories with artifacts
+│   ├── llm-cache/                  # Cached LLM responses
+│   ├── figma-cache/                # Cached Figma API data
+│   └── memory/                     # Long-term design guidelines
+└── .env.example
 ```
-
-## Phase 2 roadmap
-
-Phase 2 adds a visual comparison + refinement loop after the Codegen step:
-
-1. **Render Agent** — uses Playwright to screenshot the generated component at the correct viewport width
-2. **Diff Agent** — two-pass comparison:
-   - Pass 1: pixel diff (jimp/sharp) for a quantitative fidelity score
-   - Pass 2: GPT-4o vision diff for semantic issue identification (wrong colors, spacing, missing elements)
-3. **Refinement Agent** — targeted GPT-4o prompts to patch specific issues without rewriting the whole component
-4. **Loop** — the orchestrator repeats Render → Diff → Refine until fidelity score ≥ 0.95 or 3 iterations
-
-Adding Phase 2 requires:
-- Implementing the three stub agent functions in `src/agents/`
-- Uncommenting the Phase 2 steps in `src/mastra/workflow.ts`
-- Nothing in Phase 1 changes — open/closed principle applied to multi-agent systems

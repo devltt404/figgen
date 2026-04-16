@@ -14,6 +14,7 @@ export const GeneratedComponentSchema = z.object({
   componentName: z.string(),
   dependencies: z.array(z.string()),
   tailwindConfigPatch: z.string().nullable(),
+  patchSummary: z.string().optional(),  // present when in refinement mode
 });
 export type GeneratedComponent = z.infer<typeof GeneratedComponentSchema>;
 
@@ -37,12 +38,21 @@ export const DiffReportSchema = z.object({
 });
 export type DiffReport = z.infer<typeof DiffReportSchema>;
 
-// RefinementResult — the patched component after applying diff fixes
-export const RefinementResultSchema = z.object({
-  tsx: z.string(),
-  componentName: z.string(),
-  dependencies: z.array(z.string()),
-  tailwindConfigPatch: z.string().nullable(),
-  patchSummary: z.string(),
+// ---------------------------------------------------------------------------
+// Long-term memory — design guidelines accumulated across sessions
+// ---------------------------------------------------------------------------
+
+export const GuidelineSchema = z.object({
+  id: z.string(),
+  text: z.string(),
+  source: z.string(),       // e.g. "session-2026-04-16_14-30"
+  addedAt: z.string(),      // ISO timestamp
+  hitCount: z.number(),     // incremented each time guidelines are read
 });
-export type RefinementResult = z.infer<typeof RefinementResultSchema>;
+export type Guideline = z.infer<typeof GuidelineSchema>;
+
+export const GuidelinesFileSchema = z.object({
+  version: z.literal(1),
+  guidelines: z.array(GuidelineSchema),
+});
+export type GuidelinesFile = z.infer<typeof GuidelinesFileSchema>;

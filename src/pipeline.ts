@@ -5,24 +5,24 @@
  * Usage:
  *   npx tsx src/pipeline.ts "https://www.figma.com/design/{fileKey}/...?node-id={nodeId}" [--max-iter N]
  *
- *   --max-iter 0  skip Phase 2 entirely (no render/diff/refine)
+ *   --max-iter 0  skip the render/judge loop entirely
  *   --max-iter N  run up to N refinement iterations (default: 3)
  *
- * Phase 1 (Mastra workflow): Codegen → Write Sandbox
- * Phase 2 (direct calls):    Render → Diff → Refine (loop, max N iterations)
+ * Architecture: Codegen Agent ↔ Judge Agent loop with render as a tool.
+ * Long-term memory: guidelines read at start, written on successful completion.
  */
 
 import "dotenv/config";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { mastra } from "./mastra/index.js";
+import { runCodegen } from "./agents/codegen.js";
+import { runJudge, extractGuidelines } from "./agents/judge.js";
 import { runRender } from "./agents/render.js";
-import { runDiff } from "./agents/diff.js";
-import { runRefinement } from "./agents/refinement.js";
 import { fetchFigmaScreenshot, getFigmaNodeSize } from "./utils/figma.js";
+import { readGuidelines, writeGuidelines } from "./utils/memory.js";
 import { createRunDir, saveDebugRun, type IterationArtifacts } from "./utils/debug.js";
-import type { GeneratedComponent } from "./types/index.js";
+import type { GeneratedComponent, DiffReport } from "./types/index.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SANDBOX_COMPONENT_PATH = path.resolve(
@@ -31,7 +31,7 @@ const SANDBOX_COMPONENT_PATH = path.resolve(
 );
 
 const DEFAULT_MAX_ITER = 3;
-const FIDELITY_THRESHOLD = 0.95;
+const FIDELITY_THRESHOLD = 0.90;
 
 function isFigmaUrl(url: string): boolean {
   try {
@@ -45,7 +45,6 @@ function isFigmaUrl(url: string): boolean {
   }
 }
 
-/** Write component TSX to the sandbox, appending a default export if absent. */
 async function writeSandbox(component: GeneratedComponent): Promise<void> {
   const tsx = component.tsx.includes("export default")
     ? component.tsx
@@ -81,85 +80,21 @@ async function main(): Promise<void> {
   console.log(`  [Pipeline] run dir → ${runDir}\n`);
 
   // -------------------------------------------------------------------------
-  // Phase 1: Codegen + Write Sandbox (via Mastra workflow)
+  // Read long-term memory
   // -------------------------------------------------------------------------
-
-  let codegenOutput: GeneratedComponent | undefined;
-
-  if (skipCodegen) {
-    const existing = await fs.readFile(SANDBOX_COMPONENT_PATH, "utf-8").catch(() => null);
-    if (!existing) {
-      console.error(`\n✗ --skip-codegen: no existing component at ${SANDBOX_COMPONENT_PATH}`);
-      process.exit(1);
+  let guidelines: string[] = [];
+  try {
+    guidelines = await readGuidelines();
+    if (guidelines.length > 0) {
+      console.log(`  [Pipeline] loaded ${guidelines.length} design guideline(s) from memory`);
     }
-    const nameMatch = existing.match(/export\s+(?:default\s+)?(?:function|const)\s+([A-Z][A-Za-z0-9_]*)/);
-    codegenOutput = {
-      tsx: existing,
-      componentName: nameMatch?.[1] ?? "GeneratedComponent",
-      dependencies: ["react"],
-      tailwindConfigPatch: null,
-    };
-    console.log(`[Codegen]       — skipped (using existing ${SANDBOX_COMPONENT_PATH})`);
-  } else {
-    const workflow = mastra.getWorkflow("figmaToCodeWorkflow");
-    const run = await workflow.createRun();
-
-    let result: Awaited<ReturnType<typeof run.start>>;
-    try {
-      result = await run.start({ inputData: { figmaUrl, debugDir: runDir } });
-    } catch (err) {
-      console.error(`\n✗ Pipeline failed: ${String(err)}`);
-      process.exit(1);
-    }
-
-    if (result.status !== "success") {
-      const stepEntries = Object.entries(result.steps ?? {});
-      const failedStep = stepEntries.find(
-        ([, s]) => (s as { status?: string }).status === "failed",
-      );
-      if (failedStep) {
-        const [stepId, stepResult] = failedStep;
-        const errorMsg =
-          (stepResult as { error?: { message?: string } }).error?.message ??
-          "unknown error";
-        console.error(`\n✗ Step "${stepId}" failed: ${errorMsg}`);
-      } else {
-        console.error(
-          `\n✗ Pipeline did not complete successfully (status: ${result.status})`,
-        );
-      }
-      process.exit(1);
-    }
-
-    const steps = result.steps as Record<string, { output?: unknown }>;
-    codegenOutput = steps["codegen"]?.output as GeneratedComponent | undefined;
-    const sandboxOutput = steps["write-sandbox"]?.output as
-      | { outputPath?: string; componentName?: string }
-      | undefined;
-
-    if (codegenOutput) {
-      const lineCount = (codegenOutput.tsx ?? "").split("\n").length;
-      console.log(
-        `[Codegen]       — completed (component: ${codegenOutput.componentName ?? "unknown"}, ${lineCount} lines)`,
-      );
-    }
-    if (sandboxOutput) {
-      console.log(
-        `[Write Sandbox] — completed\n               → ${sandboxOutput.outputPath ?? SANDBOX_COMPONENT_PATH}`,
-      );
-    }
-  }
-
-  if (!codegenOutput) {
-    console.error("\n✗ No codegen output — aborting.");
-    process.exit(1);
+  } catch {
+    console.warn("  [Pipeline] could not read guidelines from memory");
   }
 
   // -------------------------------------------------------------------------
-  // Phase 2: Render → Diff → Refine loop
+  // Fetch Figma screenshot + node size
   // -------------------------------------------------------------------------
-
-  // Fetch Figma screenshot + node size once (diff agent re-fetches screenshot internally)
   let figmaScreenshot = "";
   try {
     figmaScreenshot = await fetchFigmaScreenshot(figmaUrl);
@@ -175,70 +110,114 @@ async function main(): Promise<void> {
     console.log(`  [Pipeline] Figma node size: ${nodeSize.width}×${nodeSize.height}`);
   }
 
+  // -------------------------------------------------------------------------
+  // Main loop: Codegen → Write Sandbox → Render → Judge
+  // -------------------------------------------------------------------------
   const debugIterations: IterationArtifacts[] = [];
-  let currentComponent: GeneratedComponent = codegenOutput;
+  const sessionDiffs: DiffReport[] = [];
+  let currentComponent: GeneratedComponent | undefined;
+  let latestDiff: DiffReport | undefined;
+
+  // Handle skipCodegen
+  if (skipCodegen) {
+    const existing = await fs.readFile(SANDBOX_COMPONENT_PATH, "utf-8").catch(() => null);
+    if (!existing) {
+      console.error(`\n✗ --skip-codegen: no existing component at ${SANDBOX_COMPONENT_PATH}`);
+      process.exit(1);
+    }
+    const nameMatch = existing.match(/export\s+(?:default\s+)?(?:function|const)\s+([A-Z][A-Za-z0-9_]*)/);
+    currentComponent = {
+      tsx: existing,
+      componentName: nameMatch?.[1] ?? "GeneratedComponent",
+      dependencies: ["react"],
+      tailwindConfigPatch: null,
+    };
+    console.log(`[Codegen]       — skipped (using existing ${SANDBOX_COMPONENT_PATH})`);
+  }
 
   for (let iteration = 0; iteration <= maxIter; iteration++) {
-    // Render
+    // --- Codegen / Refine ---
+    if (!skipCodegen || iteration > 0) {
+      const isRefinement = iteration > 0 && currentComponent && latestDiff;
+      console.log(`\n--- Iteration ${iteration} (${isRefinement ? "refine" : "generate"}) ---`);
+
+      try {
+        currentComponent = await runCodegen(figmaUrl, {
+          existingComponent: isRefinement ? currentComponent : undefined,
+          diffReport: isRefinement ? latestDiff : undefined,
+          guidelines,
+          debugDir: runDir,
+          iter: iteration,
+        });
+      } catch (err) {
+        console.error(`\n✗ Codegen failed (iteration ${iteration}): ${String(err)}`);
+        process.exit(1);
+      }
+
+      const lineCount = currentComponent.tsx.split("\n").length;
+      console.log(
+        `[Codegen]       — completed (component: ${currentComponent.componentName}, ${lineCount} lines)`,
+      );
+    }
+
+    // --- Write Sandbox ---
+    await writeSandbox(currentComponent!);
+    console.log(`[Write Sandbox] — completed`);
+
+    // --- Render ---
     let renderedScreenshot: string;
     try {
-      renderedScreenshot = await runRender(currentComponent, viewportSize);
+      renderedScreenshot = await runRender(currentComponent!, viewportSize);
       console.log(`[Render ${iteration}]      — completed`);
     } catch (err) {
       console.error(`\n✗ Render failed (iteration ${iteration}): ${String(err)}`);
       break;
     }
 
-    // Diff
-    let diffReport: Awaited<ReturnType<typeof runDiff>>;
+    // --- Judge ---
     try {
-      diffReport = await runDiff(figmaUrl, renderedScreenshot, runDir, iteration);
+      latestDiff = await runJudge(figmaUrl, renderedScreenshot, runDir, iteration);
       console.log(
-        `[Diff ${iteration}]        — fidelity: ${(diffReport.fidelityScore * 100).toFixed(1)}% — ${diffReport.issues.length} issue(s)`,
+        `[Judge ${iteration}]       — fidelity: ${(latestDiff.fidelityScore * 100).toFixed(1)}% — ${latestDiff.issues.length} issue(s)`,
       );
     } catch (err) {
-      console.error(`\n✗ Diff failed (iteration ${iteration}): ${String(err)}`);
+      console.error(`\n✗ Judge failed (iteration ${iteration}): ${String(err)}`);
       debugIterations.push({ iteration, screenshot: renderedScreenshot });
       break;
     }
 
-    debugIterations.push({ iteration, screenshot: renderedScreenshot, diff: diffReport });
+    debugIterations.push({ iteration, screenshot: renderedScreenshot, diff: latestDiff });
+    sessionDiffs.push(latestDiff);
 
-    // Done if fidelity is high enough or no issues remain
-    if (diffReport.fidelityScore >= FIDELITY_THRESHOLD || diffReport.issues.length === 0) {
+    // --- Check threshold ---
+    if (latestDiff.fidelityScore >= FIDELITY_THRESHOLD || latestDiff.issues.length === 0) {
       console.log(
-        `[Pipeline]      — fidelity threshold reached (${(diffReport.fidelityScore * 100).toFixed(1)}%)`,
+        `[Pipeline]      — fidelity threshold reached (${(latestDiff.fidelityScore * 100).toFixed(1)}%)`,
       );
+
+      // Extract and save guidelines to long-term memory
+      try {
+        const newGuidelines = await extractGuidelines(sessionDiffs, runDir);
+        if (newGuidelines.length > 0) {
+          const sessionId = `session-${path.basename(runDir)}`;
+          const added = await writeGuidelines(newGuidelines, sessionId);
+          if (added > 0) {
+            console.log(`[Memory]        — saved ${added} new design guideline(s)`);
+          }
+        }
+      } catch (err) {
+        console.warn(`  [Pipeline] could not save guidelines: ${String(err)}`);
+      }
+
       break;
     }
 
-    // No more refinement iterations left (also skips refine when maxIter = 0)
     if (iteration >= maxIter) break;
-
-    // Refine
-    let refined: Awaited<ReturnType<typeof runRefinement>>;
-    try {
-      refined = await runRefinement(currentComponent, diffReport, runDir, iteration);
-      console.log(`[Refine ${iteration}]      — completed (${refined.patchSummary})`);
-    } catch (err) {
-      console.error(`\n✗ Refinement failed (iteration ${iteration}): ${String(err)}`);
-      break;
-    }
-
-    // Write refined component to sandbox for next render
-    currentComponent = {
-      tsx: refined.tsx,
-      componentName: refined.componentName,
-      dependencies: refined.dependencies,
-      tailwindConfigPatch: refined.tailwindConfigPatch,
-    };
-    await writeSandbox(currentComponent);
   }
 
   // -------------------------------------------------------------------------
   // Save debug artifacts
   // -------------------------------------------------------------------------
-
   try {
     await saveDebugRun(runDir, figmaScreenshot, debugIterations);
   } catch (err) {
@@ -248,9 +227,8 @@ async function main(): Promise<void> {
   // -------------------------------------------------------------------------
   // Final summary
   // -------------------------------------------------------------------------
-
   const finalDiff = debugIterations.at(-1)?.diff;
-  const componentName = codegenOutput?.componentName ?? "GeneratedComponent";
+  const componentName = currentComponent?.componentName ?? "GeneratedComponent";
 
   console.log(`
 ✓ Pipeline completed
