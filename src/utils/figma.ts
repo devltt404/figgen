@@ -11,6 +11,25 @@ const FIGMA_CACHE_DIR = path.resolve(
   "../../output/figma-cache",
 );
 
+export async function clearFigmaCache(): Promise<number> {
+  try {
+    const entries = await fs.readdir(FIGMA_CACHE_DIR, { withFileTypes: true });
+    let count = 0;
+    for (const entry of entries) {
+      const full = path.join(FIGMA_CACHE_DIR, entry.name);
+      if (entry.isDirectory()) {
+        await fs.rm(full, { recursive: true });
+      } else {
+        await fs.unlink(full);
+      }
+      count++;
+    }
+    return count;
+  } catch {
+    return 0;
+  }
+}
+
 async function readFigmaCache<T>(key: string): Promise<T | null> {
   try {
     const raw = await fs.readFile(

@@ -26,7 +26,7 @@ const FIDELITY_THRESHOLD = 0.90;
 export type PipelineEvent =
   | { type: "log"; message: string }
   | { type: "figma_screenshot"; screenshot: string }
-  | { type: "codegen_done"; componentName: string; lines: number; tsx: string; mode: "generate" | "refine" }
+  | { type: "codegen_done"; componentName: string; lines: number; tsx: string; mode: "generate" | "refine"; iteration: number }
   | { type: "render_done"; iteration: number; screenshot: string }
   | { type: "judge_done"; iteration: number; fidelityScore: number; issues: DiffIssue[]; summary: string }
   | { type: "memory_updated"; guidelinesCount: number }
@@ -133,7 +133,7 @@ export async function runPipeline(
       tailwindConfigPatch: null,
     };
     emit({ type: "log", message: "Codegen skipped — using existing component" });
-    emit({ type: "codegen_done", componentName: currentComponent.componentName, lines: existing.split("\n").length, tsx: existing, mode: "generate" });
+    emit({ type: "codegen_done", componentName: currentComponent.componentName, lines: existing.split("\n").length, tsx: existing, mode: "generate", iteration: 0 });
   }
 
   for (let iteration = 0; iteration <= maxIter; iteration++) {
@@ -158,7 +158,7 @@ export async function runPipeline(
 
       const lineCount = currentComponent.tsx.split("\n").length;
       emit({ type: "log", message: `Codegen done — ${currentComponent.componentName} (${lineCount} lines)` });
-      emit({ type: "codegen_done", componentName: currentComponent.componentName, lines: lineCount, tsx: currentComponent.tsx, mode });
+      emit({ type: "codegen_done", componentName: currentComponent.componentName, lines: lineCount, tsx: currentComponent.tsx, mode, iteration });
     }
 
     // --- Write Sandbox ---
@@ -183,6 +183,15 @@ export async function runPipeline(
       const pct = (latestDiff.fidelityScore * 100).toFixed(1);
       emit({ type: "log", message: `Judge ${iteration} — fidelity: ${pct}% — ${latestDiff.issues.length} issue(s)` });
       emit({ type: "judge_done", iteration, fidelityScore: latestDiff.fidelityScore, issues: latestDiff.issues, summary: latestDiff.summary });
+
+      // If the UI didn't get the Figma screenshot earlier, try again now
+      // (the judge's fetch will have populated the cache)
+      if (!figmaScreenshot) {
+        try {
+          figmaScreenshot = await fetchFigmaScreenshot(figmaUrl);
+          emit({ type: "figma_screenshot", screenshot: figmaScreenshot });
+        } catch {}
+      }
     } catch (err) {
       emit({ type: "error", message: `Judge failed (iteration ${iteration}): ${String(err)}` });
       debugIterations.push({ iteration, screenshot: renderedScreenshot });
@@ -199,11 +208,10 @@ export async function runPipeline(
       // Extract and save guidelines to long-term memory
       try {
         emit({ type: "log", message: "Extracting design guidelines…" });
-        const newGuidelines = await extractGuidelines(sessionDiffs, runDir);
+        const newGuidelines = await extractGuidelines(sessionDiffs, runDir, guidelines);
         emit({ type: "log", message: `Extracted ${newGuidelines.length} guideline(s)` });
         if (newGuidelines.length > 0) {
-          const sessionId = `session-${path.basename(runDir)}`;
-          const added = await writeGuidelines(newGuidelines, sessionId);
+          const added = await writeGuidelines(newGuidelines);
           if (added > 0) {
             emit({ type: "log", message: `Saved ${added} new design guideline(s) to memory` });
             emit({ type: "memory_updated", guidelinesCount: added });

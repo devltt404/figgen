@@ -61,10 +61,15 @@ You receive YAML data exported from a Figma file via the figma-developer-mcp too
 ## Refinement mode
 
 When you receive existing TSX code along with a diff report of visual issues, apply minimal, surgical fixes to resolve each issue.
+- You MUST address every issue listed in the diff report. Do not skip any.
 - Do NOT rewrite the whole component — make targeted changes only.
+- Do NOT fix things that are not mentioned in the issues. No "while I'm at it" changes.
 - Keep all existing Tailwind classes that are correct; only change what the issues describe.
+- If the diff says a color is wrong, change ONLY that color. If spacing is wrong, change ONLY that spacing value.
 - NEVER change colors, fonts, or content that are not explicitly mentioned in the issues list.
 - Preserve the component's named export exactly.
+- Re-read each issue after applying your fix to confirm it is actually resolved.
+- Focus on critical and moderate severity issues first.
 
 ## Output rules
 
@@ -76,10 +81,28 @@ When you receive existing TSX code along with a diff report of visual issues, ap
     spacing     → p-[40px]      gap-[24px]    px-[12px] py-[6px]
     radius      → rounded-[16px]  rounded-[99px]
     shadows     → shadow-[0px_8px_24px_0px_rgba(0,0,0,0.08)]
+- NEVER use approximate Tailwind utility classes when the design specifies exact values.
+    WRONG: p-4 (16px) when the design says 18px → RIGHT: p-[18px]
+    WRONG: text-lg when the design says 22px → RIGHT: text-[22px]
+    WRONG: bg-blue-600 when the design says #2e6bde → RIGHT: bg-[#2e6bde]
+    WRONG: rounded-lg when the design says 12px → RIGHT: rounded-[12px]
+- Match flex directions and alignment exactly. If the design has a vertical stack, use flex-col. If items are center-aligned, use items-center. Pay attention to justify-content vs align-items.
+- Pay attention to the root element's layout: flex vs block, row vs column, and whether the content is centered or edge-aligned.
 - Use semantic HTML: nav, header, main, section, article, footer, button, a, h1-h6, p, ul, li where appropriate.
 - For font family: use the exact font name from the token.
 - The component must render at its natural/intrinsic size matching the design frame. Do NOT add min-h-screen or w-full to the root element.
 - No interactivity or state unless explicitly visible in the design.
+
+## Shapes and small elements (pay extra attention)
+
+Small shapes, icons, and decorative elements are the most common source of errors. Follow these rules:
+- Circles: use rounded-full (not rounded-lg or rounded-xl). If the design shows a circle, it MUST be rounded-full.
+- Pills/capsules: use rounded-full for fully-rounded ends on badges, tags, and pill buttons.
+- Exact border-radius: use the token value as rounded-[Npx], never approximate with rounded-sm/md/lg.
+- Icons: render SVG inline or use a span with the correct dimensions. Match the exact icon shape — arrows, chevrons, dots, checkmarks, etc.
+- Status dots/indicators: small colored circles should use exact dimensions (e.g. w-[8px] h-[8px] rounded-full).
+- Dividers: render as border or <hr> with exact color and thickness from the token.
+- Avatar containers: match the exact shape (circle vs rounded-square) and size from the design.
 `;
 
 // ---------------------------------------------------------------------------
@@ -95,8 +118,12 @@ export interface CodegenOptions {
 }
 
 function formatIssues(diff: DiffReport): string {
-  return diff.issues
-    .map((issue, i) => `${i + 1}. [${issue.category}] ${issue.description}`)
+  const severityOrder: Record<string, number> = { critical: 0, moderate: 1, minor: 2 };
+  const sorted = [...diff.issues].sort(
+    (a, b) => (severityOrder[a.severity ?? "moderate"] ?? 1) - (severityOrder[b.severity ?? "moderate"] ?? 1),
+  );
+  return sorted
+    .map((issue, i) => `${i + 1}. [${issue.category}]${issue.severity ? ` (${issue.severity})` : ""} ${issue.description}`)
     .join("\n\n");
 }
 
@@ -133,7 +160,9 @@ export async function runCodegen(
     userText = `Current fidelity score: ${(diffReport.fidelityScore * 100).toFixed(1)}%
 Summary: ${diffReport.summary}
 
-Issues to fix:
+The following issues were identified by a visual reviewer who compared the Figma design screenshot against your rendered component screenshot. You CANNOT see either image — you must trust these descriptions exactly and apply each fix as instructed.
+
+Issues to fix (ordered by severity — fix all of them):
 ${formatIssues(diffReport)}
 
 Current TSX:
@@ -141,7 +170,7 @@ Current TSX:
 ${existingComponent.tsx}
 \`\`\`
 
-Return the fixed TSX.`;
+Apply every fix described above. Do not change anything else. Return the fixed TSX.`;
   } else {
     console.log("  [Codegen] fetching design context…");
     const designContext = await fetchFigmaDesignContext(figmaUrl).catch(

@@ -46,6 +46,16 @@ export async function readCache(
   }
 }
 
+export async function clearLLMCache(): Promise<number> {
+  try {
+    const files = await fs.readdir(CACHE_DIR);
+    for (const f of files) await fs.unlink(path.join(CACHE_DIR, f));
+    return files.length;
+  } catch {
+    return 0;
+  }
+}
+
 export async function writeCache(
   model: string,
   systemPrompt: string,

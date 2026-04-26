@@ -197,10 +197,9 @@ async function main(): Promise<void> {
 
       // Extract and save guidelines to long-term memory
       try {
-        const newGuidelines = await extractGuidelines(sessionDiffs, runDir);
+        const newGuidelines = await extractGuidelines(sessionDiffs, runDir, guidelines);
         if (newGuidelines.length > 0) {
-          const sessionId = `session-${path.basename(runDir)}`;
-          const added = await writeGuidelines(newGuidelines, sessionId);
+          const added = await writeGuidelines(newGuidelines);
           if (added > 0) {
             console.log(`[Memory]        — saved ${added} new design guideline(s)`);
           }

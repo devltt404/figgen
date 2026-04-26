@@ -202,6 +202,35 @@ body {
   background: #3f3f3f;
 }
 
+.header-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+.action-btn {
+  font-size: 11px;
+  font-family: var(--mono);
+  padding: 5px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.action-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+.action-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.action-btn--danger:hover:not(:disabled) {
+  border-color: var(--red);
+  color: var(--red);
+}
+
 .status-dot {
   width: 7px;
   height: 7px;
@@ -407,10 +436,30 @@ body {
   opacity: 0.7;
 }
 
+.iter-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
 .iter-issues-count {
   font-size: 11px;
   color: var(--text-muted);
   font-family: var(--mono);
+}
+.copy-code-btn {
+  font-size: 11px;
+  font-family: var(--mono);
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.copy-code-btn:hover {
+  background: var(--accent-dim);
+  border-color: var(--accent);
 }
 
 .iter-summary {
@@ -490,6 +539,14 @@ body {
   letter-spacing: 0.03em;
 }
 
+.severity-badge {
+  font-size: 10px;
+  font-family: var(--mono);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  opacity: 0.85;
+}
 .issue-desc {
   color: var(--text);
   line-height: 1.45;

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 import type { DiffIssue, IterationData, PipelineEvent } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -27,6 +27,12 @@ const CATEGORY_COLORS: Record<DiffIssue["category"], string> = {
   "missing-element": "#ef4444",
   "extra-element": "#f97316",
   other: "#6b7280",
+};
+
+const SEVERITY_COLORS: Record<string, string> = {
+  critical: "#ef4444",
+  moderate: "#f59e0b",
+  minor: "#6b7280",
 };
 
 // ---------------------------------------------------------------------------
@@ -80,6 +86,14 @@ function IssueList({ issues }: { issues: DiffIssue[] }) {
           >
             {issue.category}
           </span>
+          {issue.severity && (
+            <span
+              className="severity-badge"
+              style={{ color: SEVERITY_COLORS[issue.severity] }}
+            >
+              {issue.severity}
+            </span>
+          )}
           <span className="issue-desc">{issue.description}</span>
         </li>
       ))}
@@ -98,9 +112,19 @@ function IterationCard({
   index: number;
   isLoading?: boolean;
 }) {
+  const [copied, setCopied] = useState(false);
   const isInitial = iter.iteration === 0;
   const score = iter.diff?.fidelityScore;
   const showCompare = isLoading || !!iter.screenshot || !!figmaScreenshot;
+
+  const handleCopy = (e: MouseEvent) => {
+    e.stopPropagation();
+    if (!iter.tsx) return;
+    navigator.clipboard.writeText(iter.tsx).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
 
   return (
     <div className="iter-card">
@@ -119,12 +143,19 @@ function IterationCard({
             </span>
           )}
         </div>
-        {iter.diff && (
-          <span className="iter-issues-count">
-            {iter.diff.issues.length} issue
-            {iter.diff.issues.length !== 1 ? "s" : ""}
-          </span>
-        )}
+        <div className="iter-header-actions">
+          {iter.tsx && (
+            <button className="copy-code-btn" onClick={handleCopy}>
+              {copied ? "Copied!" : "Copy Code"}
+            </button>
+          )}
+          {iter.diff && (
+            <span className="iter-issues-count">
+              {iter.diff.issues.length} issue
+              {iter.diff.issues.length !== 1 ? "s" : ""}
+            </span>
+          )}
+        </div>
       </div>
 
       {showCompare && (
@@ -186,6 +217,18 @@ export default function App() {
         case "codegen_done":
           setComponentName(event.componentName);
           addLog(`✓ Component: ${event.componentName} (${event.lines} lines)`);
+          setIterations((prev) => {
+            const next = [...prev];
+            const existing = next.findIndex(
+              (i) => i.iteration === event.iteration,
+            );
+            if (existing >= 0) {
+              next[existing] = { ...next[existing], tsx: event.tsx };
+            } else {
+              next.push({ iteration: event.iteration, tsx: event.tsx });
+            }
+            return next;
+          });
           break;
         case "render_done":
           setIterations((prev) => {
@@ -352,6 +395,58 @@ export default function App() {
               )}
             </button>
           </form>
+
+          <div className="header-actions">
+            <button
+              className="action-btn"
+              onClick={async () => {
+                try {
+                  const res = await fetch("/api/cache", { method: "DELETE" });
+                  const data = await res.json();
+                  addLog(`LLM cache cleared (${data.cleared.llm} entries)`);
+                } catch {
+                  addLog("✗ Failed to clear LLM cache");
+                }
+              }}
+              disabled={isRunning}
+              title="Clear cached LLM responses (codegen + judge). Figma data is preserved."
+            >
+              Clear LLM Cache
+            </button>
+            <button
+              className="action-btn"
+              onClick={async () => {
+                if (!window.confirm("Clear Figma data cache? Next run will re-fetch design data and screenshots from Figma.")) return;
+                try {
+                  const res = await fetch("/api/figma-cache", { method: "DELETE" });
+                  const data = await res.json();
+                  addLog(`Figma cache cleared (${data.cleared.figma} entries)`);
+                } catch {
+                  addLog("✗ Failed to clear Figma cache");
+                }
+              }}
+              disabled={isRunning}
+              title="Clear cached Figma screenshots and design data. Next run will re-fetch from Figma API."
+            >
+              Clear Figma Cache
+            </button>
+            <button
+              className="action-btn action-btn--danger"
+              onClick={async () => {
+                if (!window.confirm("Clear all design guidelines from memory?")) return;
+                try {
+                  await fetch("/api/memory", { method: "DELETE" });
+                  addLog("Memory cleared — all guidelines removed");
+                } catch {
+                  addLog("✗ Failed to clear memory");
+                }
+              }}
+              disabled={isRunning}
+              title="Delete all accumulated design guidelines. Cannot be undone."
+            >
+              Clear Memory
+            </button>
+          </div>
 
           <div className={`status-dot status-dot--${status}`} title={status} />
         </div>
