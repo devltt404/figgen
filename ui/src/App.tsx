@@ -5,20 +5,6 @@ import type { DiffIssue, IterationData, PipelineEvent } from "./types";
 // Helpers
 // ---------------------------------------------------------------------------
 
-function fidelityColor(score: number): string {
-  if (score >= 0.95) return "var(--green)";
-  if (score >= 0.8) return "var(--yellow)";
-  if (score >= 0.5) return "var(--orange)";
-  return "var(--red)";
-}
-
-function fidelityLabel(score: number): string {
-  if (score >= 0.95) return "Excellent";
-  if (score >= 0.8) return "Good";
-  if (score >= 0.5) return "Fair";
-  return "Poor";
-}
-
 const CATEGORY_COLORS: Record<DiffIssue["category"], string> = {
   layout: "#3b82f6",
   color: "#8b5cf6",
@@ -114,7 +100,6 @@ function IterationCard({
 }) {
   const [copied, setCopied] = useState(false);
   const isInitial = iter.iteration === 0;
-  const score = iter.diff?.fidelityScore;
   const showCompare = isLoading || !!iter.screenshot || !!figmaScreenshot;
 
   const handleCopy = (e: MouseEvent) => {
@@ -133,15 +118,6 @@ function IterationCard({
           <span className="iter-index">
             {isInitial ? "Initial" : `Refined ×${iter.iteration}`}
           </span>
-          {score !== undefined && (
-            <span
-              className="iter-score"
-              style={{ color: fidelityColor(score) }}
-            >
-              {(score * 100).toFixed(1)}%
-              <span className="iter-score-label">{fidelityLabel(score)}</span>
-            </span>
-          )}
         </div>
         <div className="iter-header-actions">
           {iter.tsx && (
@@ -257,7 +233,6 @@ export default function App() {
               (i) => i.iteration === event.iteration,
             );
             const diffData = {
-              fidelityScore: event.fidelityScore,
               issues: event.issues,
               summary: event.summary,
             };
@@ -275,7 +250,7 @@ export default function App() {
         case "done":
           setStatus("done");
           addLog(
-            `✓ Done — ${event.iterations} iteration(s)${event.fidelityScore !== null ? `, ${(event.fidelityScore * 100).toFixed(1)}% fidelity` : ""}`,
+            `✓ Done — ${event.iterations} iteration(s)${event.finalIssueCount !== null ? `, ${event.finalIssueCount} remaining issue(s)` : ""}`,
           );
           break;
         case "error":

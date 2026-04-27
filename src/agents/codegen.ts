@@ -61,15 +61,21 @@ You receive YAML data exported from a Figma file via the figma-developer-mcp too
 ## Refinement mode
 
 When you receive existing TSX code along with a diff report of visual issues, apply minimal, surgical fixes to resolve each issue.
-- You MUST address every issue listed in the diff report. Do not skip any.
-- Do NOT rewrite the whole component — make targeted changes only.
-- Do NOT fix things that are not mentioned in the issues. No "while I'm at it" changes.
-- Keep all existing Tailwind classes that are correct; only change what the issues describe.
-- If the diff says a color is wrong, change ONLY that color. If spacing is wrong, change ONLY that spacing value.
-- NEVER change colors, fonts, or content that are not explicitly mentioned in the issues list.
+
+### Mandatory rules:
+- You MUST address EVERY issue listed in the diff report. Do not skip any.
+- Do NOT rewrite the whole component — make targeted, surgical changes only.
+- For each issue, find the EXACT element described and change ONLY the property mentioned.
+- Keep all existing Tailwind classes that are correct. Do NOT change anything that isn't in the issues list.
 - Preserve the component's named export exactly.
-- Re-read each issue after applying your fix to confirm it is actually resolved.
-- Focus on critical and moderate severity issues first.
+
+### CRITICAL — do not introduce regressions:
+- Before changing any line, ask yourself: "Is this line mentioned in the issues?" If not, DO NOT TOUCH IT.
+- Do NOT reorganize, reformat, or restructure code that is working correctly.
+- Do NOT change colors, font sizes, spacing, or border-radius values unless a specific issue tells you to.
+- Do NOT remove classes or elements that aren't mentioned in the issues.
+- The ONLY lines you should change are the ones directly targeted by the issue descriptions.
+- Your output should be as close to the input as possible, with minimal diff.
 
 ## Output rules
 
@@ -157,20 +163,24 @@ export async function runCodegen(
   let userText: string;
 
   if (isRefinement) {
-    userText = `Current fidelity score: ${(diffReport.fidelityScore * 100).toFixed(1)}%
-Summary: ${diffReport.summary}
-
-The following issues were identified by a visual reviewer who compared the Figma design screenshot against your rendered component screenshot. You CANNOT see either image — you must trust these descriptions exactly and apply each fix as instructed.
-
-Issues to fix (ordered by severity — fix all of them):
-${formatIssues(diffReport)}
-
-Current TSX:
+    userText = `Current TSX to fix:
 \`\`\`tsx
 ${existingComponent.tsx}
 \`\`\`
 
-Apply every fix described above. Do not change anything else. Return the fixed TSX.`;
+Summary: ${diffReport.summary}
+
+A visual reviewer compared the Figma design screenshot against the rendered component screenshot and found ${diffReport.issues.length} issue(s). You CANNOT see either image — you must trust these descriptions exactly and apply each fix as instructed.
+
+You MUST fix ALL ${diffReport.issues.length} issues below — not some, not most, ALL of them:
+
+${formatIssues(diffReport)}
+
+Instructions:
+1. Read ALL ${diffReport.issues.length} issues above before you start writing any code.
+2. For each issue, locate the exact element in the TSX and determine the fix.
+3. Output the complete fixed TSX with every issue resolved.
+4. Do not change anything not mentioned in the issues.`;
   } else {
     console.log("  [Codegen] fetching design context…");
     const designContext = await fetchFigmaDesignContext(figmaUrl).catch(
@@ -211,7 +221,7 @@ Apply every fix described above. Do not change anything else. Return the fixed T
     try {
       const response = await client.chat.completions.create({
         model,
-        max_completion_tokens: 4096,
+        max_completion_tokens: 16384,
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userText },

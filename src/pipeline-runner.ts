@@ -21,16 +21,15 @@ import type { GeneratedComponent, DiffIssue, DiffReport } from "./types/index.js
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SANDBOX_COMPONENT_PATH = path.resolve(__dirname, "../sandbox/src/GeneratedComponent.tsx");
 const DEFAULT_MAX_ITER = 3;
-const FIDELITY_THRESHOLD = 0.90;
 
 export type PipelineEvent =
   | { type: "log"; message: string }
   | { type: "figma_screenshot"; screenshot: string }
   | { type: "codegen_done"; componentName: string; lines: number; tsx: string; mode: "generate" | "refine"; iteration: number }
   | { type: "render_done"; iteration: number; screenshot: string }
-  | { type: "judge_done"; iteration: number; fidelityScore: number; issues: DiffIssue[]; summary: string }
+  | { type: "judge_done"; iteration: number; issues: DiffIssue[]; summary: string }
   | { type: "memory_updated"; guidelinesCount: number }
-  | { type: "done"; componentName: string; iterations: number; fidelityScore: number | null }
+  | { type: "done"; componentName: string; iterations: number; finalIssueCount: number | null }
   | { type: "error"; message: string };
 
 export interface PipelineOptions {
@@ -180,9 +179,8 @@ export async function runPipeline(
     emit({ type: "log", message: `Judging iteration ${iteration}…` });
     try {
       latestDiff = await runJudge(figmaUrl, renderedScreenshot, runDir, iteration);
-      const pct = (latestDiff.fidelityScore * 100).toFixed(1);
-      emit({ type: "log", message: `Judge ${iteration} — fidelity: ${pct}% — ${latestDiff.issues.length} issue(s)` });
-      emit({ type: "judge_done", iteration, fidelityScore: latestDiff.fidelityScore, issues: latestDiff.issues, summary: latestDiff.summary });
+      emit({ type: "log", message: `Judge ${iteration} — ${latestDiff.issues.length} issue(s)` });
+      emit({ type: "judge_done", iteration, issues: latestDiff.issues, summary: latestDiff.summary });
 
       // If the UI didn't get the Figma screenshot earlier, try again now
       // (the judge's fetch will have populated the cache)
@@ -201,30 +199,33 @@ export async function runPipeline(
     debugIterations.push({ iteration, screenshot: renderedScreenshot, diff: latestDiff });
     sessionDiffs.push(latestDiff);
 
-    // --- Check threshold ---
-    if (latestDiff.fidelityScore >= FIDELITY_THRESHOLD || latestDiff.issues.length === 0) {
-      emit({ type: "log", message: `Fidelity threshold reached (${(latestDiff.fidelityScore * 100).toFixed(1)}%) — done` });
-
-      // Extract and save guidelines to long-term memory
-      try {
-        emit({ type: "log", message: "Extracting design guidelines…" });
-        const newGuidelines = await extractGuidelines(sessionDiffs, runDir, guidelines);
-        emit({ type: "log", message: `Extracted ${newGuidelines.length} guideline(s)` });
-        if (newGuidelines.length > 0) {
-          const added = await writeGuidelines(newGuidelines);
-          if (added > 0) {
-            emit({ type: "log", message: `Saved ${added} new design guideline(s) to memory` });
-            emit({ type: "memory_updated", guidelinesCount: added });
-          }
-        }
-      } catch (err) {
-        emit({ type: "log", message: `Warning: could not save guidelines — ${String(err)}` });
-      }
-
+    // --- Check for zero issues (early stop) ---
+    if (latestDiff.issues.length === 0) {
+      emit({ type: "log", message: "No issues found — stopping early" });
       break;
     }
 
     if (iteration >= maxIter) break;
+  }
+
+  // -------------------------------------------------------------------------
+  // Extract and save guidelines to long-term memory (after final iteration)
+  // -------------------------------------------------------------------------
+  if (sessionDiffs.length > 0) {
+    try {
+      emit({ type: "log", message: "Extracting design guidelines…" });
+      const newGuidelines = await extractGuidelines(sessionDiffs, runDir, guidelines);
+      emit({ type: "log", message: `Extracted ${newGuidelines.length} guideline(s)` });
+      if (newGuidelines.length > 0) {
+        const added = await writeGuidelines(newGuidelines);
+        if (added > 0) {
+          emit({ type: "log", message: `Saved ${added} new design guideline(s) to memory` });
+          emit({ type: "memory_updated", guidelinesCount: added });
+        }
+      }
+    } catch (err) {
+      emit({ type: "log", message: `Warning: could not save guidelines — ${String(err)}` });
+    }
   }
 
   try {
@@ -236,6 +237,6 @@ export async function runPipeline(
     type: "done",
     componentName: currentComponent?.componentName ?? "Unknown",
     iterations: debugIterations.length,
-    fidelityScore: finalDiff?.fidelityScore ?? null,
+    finalIssueCount: finalDiff?.issues.length ?? null,
   });
 }

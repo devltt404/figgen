@@ -24,91 +24,67 @@ function createClient(): LLMClient {
 // Visual comparison
 // ---------------------------------------------------------------------------
 
-const JUDGE_SYSTEM_PROMPT = `You are a design-fidelity reviewer producing instructions for a BLIND code agent.
-You will be given two screenshots:
-  1. The ORIGINAL Figma design (design)
-  2. The RENDERED React component (implementation)
+const JUDGE_SYSTEM_PROMPT = `You are a design-fidelity reviewer. You will receive two labeled screenshots: the original Figma design and the rendered React component. Your job is to identify visual differences and produce fix instructions for a code agent that CANNOT see either image.
 
-CRITICAL CONTEXT: The code agent that will fix these issues CANNOT see either image. It can only read your text descriptions. Your descriptions must be precise enough that someone with no visual reference can make the exact correction in code. Vague descriptions like "looks different" or "spacing is off" are USELESS.
+## Rules — read these first
 
-Evaluate the implementation against the design systematically:
+1. **Accuracy above all.** Only report differences you are CERTAIN about. If you are unsure whether something differs, DO NOT report it. A wrong instruction is far worse than a missing one — it will break working code.
+2. **Look at the images carefully.** The first image is the Figma design. The second image is the rendered component. Do not confuse which is which. When you describe a difference, double-check that you are attributing the correct appearance to the correct image.
+3. **Keep it short.** Report only the most obvious and impactful differences. 2–5 high-confidence issues is ideal. Do not pad the list with speculative or low-confidence observations.
+4. **No guessing values.** If you cannot clearly determine a specific pixel value, color hex, or radius from the screenshot, describe the difference qualitatively (e.g., "the button corners are more rounded in the render than in the design") rather than inventing exact values.
 
-1. **Layout & Structure**: Are elements arranged in the same direction (row/column)? Same nesting? Same alignment (left, center, right)? Same order?
-2. **Colors**: Do backgrounds, text colors, borders, and shadows match exactly?
-3. **Typography**: Do font sizes, weights, families, and line heights match? Is text content identical?
-4. **Spacing**: Do padding, margins, and gaps between elements match?
-5. **Content**: Is all text content present and correct? Are images/icons present? Are there extra or missing elements?
-6. **Visual Hierarchy**: Do element proportions, sizes, and emphasis match the design?
-7. **Shapes & Icons**: Pay EXTRA attention to small decorative elements, icons, badges, avatars, dividers, and geometric shapes. These are frequently wrong. Check:
-   - Is each shape the correct type? (circle vs rounded-rectangle vs pill vs square)
-   - Are border-radius values correct? (fully rounded = rounded-full, slight rounding = specific px value)
-   - Are small icons the right size, color, and position?
-   - Are decorative elements like dots, lines, dividers, chevrons, arrows present and correct?
-   - Are avatar/profile image containers the right shape (circle vs square) and size?
+## What to look for
 
-For each issue found, assign a severity:
-- "critical": The layout is structurally wrong, major elements are missing, or colors are completely off
-- "moderate": Noticeable spacing/sizing differences, wrong font weight, minor color mismatch
-- "minor": Subtle spacing differences, slight alignment issues
+Focus on differences that a normal person would notice at a glance:
+- Structural layout differences (wrong direction, alignment, or order)
+- Missing or extra elements
+- Clearly wrong colors (not subtle shade differences)
+- Obvious size mismatches
+- Missing or extra borders, shadows
+- Clearly different border-radius (but only if obviously different — do not nitpick)
+- Wrong or missing text content
+- Inaccurate shapes and alignments (e.g. circles, squares, triangles, centered, aligned, etc.)
+- Inaccurate font family, size, weight, style, line height, letter spacing, text wrapping, truncation, etc.
+- Inaccurate padding, margin, gap, border, shadow, etc.
+- Inaccurate flex, grid, display, visibility, opacity, etc.
+- Inaccurate position, top, left, right, bottom, z-index, etc.
+- Inaccurate transform, rotate, scale, skew, etc.
+- Inaccurate animation, transition, etc.
+- Inaccurate media query, breakpoint, etc.
+- Inaccurate print, screen, etc.
 
-Return a JSON object:
+Skip anything you'd need to squint or pixel-peep to notice.
+
+## How to write each issue
+
+Each issue must tell the blind code agent:
+- Which element is wrong (identify by its text label, position, or role)
+- What the Figma design shows for that element
+- What the rendered component shows instead
+- What to change
+
+Example: "The 'Follow' button in the design has rounded corners (~10px radius) but the render shows fully rounded pill-shaped ends — change to rounded-[10px] to match the design"
+
+## Severity
+- "critical": Layout structure is wrong, elements are missing or in wrong order
+- "moderate": Visible styling difference (color, size, shape, border, shadow)
+- "minor": Small but noticeable difference
+
+## Output
+
+Return ONLY a JSON object, no markdown fences:
 {
-  "fidelityScore": <0.0-1.0>,
-  "summary": "<one-sentence assessment>",
+  "summary": "<one sentence>",
   "issues": [
     {
       "category": "<layout|color|typography|spacing|missing-element|extra-element|other>",
       "severity": "<critical|moderate|minor>",
-      "description": "<specific, actionable fix instruction>"
+      "description": "<fix instruction>"
     }
   ]
 }
 
-## How to write descriptions (IMPORTANT)
-
-Each description must be a FIX INSTRUCTION, not an observation. The blind code agent needs to know:
-1. WHAT element is wrong (identify it by its text content, position, or role — e.g. "the 'Sign Up' button", "the top navigation bar", "the second card in the grid")
-2. WHAT is wrong with it (the specific property: color, size, position, spacing, etc.)
-3. WHAT the design shows (the correct value)
-4. WHAT the implementation shows (the current wrong value)
-
-Examples of GOOD descriptions:
-- "The 'Get Started' button background is #2563eb in the design but renders as #3b82f6 — change to bg-[#2563eb]"
-- "The hero heading is ~40px in the design but renders at ~32px — increase to text-[40px]"
-- "The card grid uses a 3-column layout in the design but renders as a single column — change to grid-cols-3"
-- "The nav links are horizontally spaced with ~32px gaps in the design but render with ~16px gaps — increase gap to gap-[32px]"
-- "The design shows a search icon to the left of the input field, but the implementation is missing it — add a search icon before the input"
-- "The sidebar is on the left side in the design but renders on the right — move it to the left by reordering the flex children"
-- "The profile avatar is a ~48px diameter CIRCLE in the design but renders as a ~64px SQUARE — change to w-[48px] h-[48px] rounded-full"
-- "The status indicator is a small 8px filled circle (#22c55e) in the design but is missing in the implementation — add a w-[8px] h-[8px] rounded-full bg-[#22c55e] element"
-- "The dropdown arrow is a downward-pointing chevron (▼) in the design but renders as a right-pointing arrow (▶) — rotate it 90 degrees or use a down-chevron SVG"
-- "The tag/badge has a pill shape (fully rounded ends) in the design but renders with sharp corners — add rounded-full"
-- "The divider line between sections is 1px solid #e5e7eb in the design but is missing — add a border-b border-[#e5e7eb] or an <hr>"
-
-Examples of BAD descriptions (never write these):
-- "Colors don't match" (which element? what colors?)
-- "Spacing is off" (where? by how much? which direction?)
-- "Layout looks different" (how specifically?)
-- "Font seems wrong" (which text? what property? what values?)
-- "Icon looks wrong" (what icon? what shape is it? what should it be?)
-- "Shape is different" (what shape? where? what is it currently? what should it be?)
-
-## Scoring guidance — be strict, not generous:
-- 1.0: Pixel-perfect, no discernible differences at all
-- 0.90-0.99: ONLY minor differences (1-2px spacing, slightly different font rendering). Reserve 0.90+ for truly close matches.
-- 0.70-0.89: Several noticeable issues but overall structure is correct. Most first-pass generations land here.
-- 0.50-0.69: Significant issues — wrong colors, missing sections, broken layout
-- Below 0.50: Fundamentally different from the design
-
-IMPORTANT scoring rules:
-- If ANY critical issue exists, the score MUST be below 0.85.
-- If 3+ moderate issues exist, the score MUST be below 0.90.
-- Err on the side of being too strict rather than too lenient — false passes waste iteration budget.
-- The score should reflect what a human designer would think, not just structural similarity.
-
-Rules:
-- Output ONLY valid JSON. No markdown fences, no explanation.
-- If the images are identical, return fidelityScore: 1.0 and an empty issues array.`;
+If the two images look the same, return an empty issues array.`;
 
 export async function runJudge(
   figmaUrl: string,
@@ -145,11 +121,15 @@ export async function runJudge(
             content: [
               {
                 type: "text",
-                text: "Compare these two screenshots and return the JSON diff report.",
+                text: "IMAGE 1 below is the ORIGINAL FIGMA DESIGN (the ground truth).",
               },
               {
                 type: "image_url",
                 image_url: { url: `data:image/png;base64,${figmaScreenshot}`, detail: "high" },
+              },
+              {
+                type: "text",
+                text: "IMAGE 2 below is the RENDERED REACT COMPONENT (the implementation to critique). Compare it against the Figma design above and return the JSON diff report.",
               },
               {
                 type: "image_url",
@@ -183,9 +163,7 @@ export async function runJudge(
     throw new Error(`Judge Agent — failed to parse LLM response as JSON:\n${raw}`);
   }
 
-  console.log(
-    `  [Judge] fidelity: ${(report.fidelityScore * 100).toFixed(1)}% — ${report.issues.length} issue(s)`,
-  );
+  console.log(`  [Judge] ${report.issues.length} issue(s) found`);
 
   if (debugDir) {
     await fs.writeFile(
@@ -232,7 +210,7 @@ export async function extractGuidelines(
   let userText = sessionDiffs
     .map(
       (d, i) =>
-        `Iteration ${i}:\n  Fidelity: ${(d.fidelityScore * 100).toFixed(1)}%\n  Summary: ${d.summary}\n  Issues:\n${d.issues.map((iss) => `    - [${iss.category}]${iss.severity ? ` (${iss.severity})` : ""} ${iss.description}`).join("\n")}`,
+        `Iteration ${i}:\n  Summary: ${d.summary}\n  Issues:\n${d.issues.map((iss) => `    - [${iss.category}]${iss.severity ? ` (${iss.severity})` : ""} ${iss.description}`).join("\n")}`,
     )
     .join("\n\n");
 

@@ -31,7 +31,6 @@ const SANDBOX_COMPONENT_PATH = path.resolve(
 );
 
 const DEFAULT_MAX_ITER = 3;
-const FIDELITY_THRESHOLD = 0.90;
 
 function isFigmaUrl(url: string): boolean {
   try {
@@ -178,7 +177,7 @@ async function main(): Promise<void> {
     try {
       latestDiff = await runJudge(figmaUrl, renderedScreenshot, runDir, iteration);
       console.log(
-        `[Judge ${iteration}]       — fidelity: ${(latestDiff.fidelityScore * 100).toFixed(1)}% — ${latestDiff.issues.length} issue(s)`,
+        `[Judge ${iteration}]       — ${latestDiff.issues.length} issue(s)`,
       );
     } catch (err) {
       console.error(`\n✗ Judge failed (iteration ${iteration}): ${String(err)}`);
@@ -189,29 +188,30 @@ async function main(): Promise<void> {
     debugIterations.push({ iteration, screenshot: renderedScreenshot, diff: latestDiff });
     sessionDiffs.push(latestDiff);
 
-    // --- Check threshold ---
-    if (latestDiff.fidelityScore >= FIDELITY_THRESHOLD || latestDiff.issues.length === 0) {
-      console.log(
-        `[Pipeline]      — fidelity threshold reached (${(latestDiff.fidelityScore * 100).toFixed(1)}%)`,
-      );
-
-      // Extract and save guidelines to long-term memory
-      try {
-        const newGuidelines = await extractGuidelines(sessionDiffs, runDir, guidelines);
-        if (newGuidelines.length > 0) {
-          const added = await writeGuidelines(newGuidelines);
-          if (added > 0) {
-            console.log(`[Memory]        — saved ${added} new design guideline(s)`);
-          }
-        }
-      } catch (err) {
-        console.warn(`  [Pipeline] could not save guidelines: ${String(err)}`);
-      }
-
+    // --- Check for zero issues (early stop) ---
+    if (latestDiff.issues.length === 0) {
+      console.log(`[Pipeline]      — no issues found, stopping early`);
       break;
     }
 
     if (iteration >= maxIter) break;
+  }
+
+  // -------------------------------------------------------------------------
+  // Extract and save guidelines to long-term memory (after final iteration)
+  // -------------------------------------------------------------------------
+  if (sessionDiffs.length > 0) {
+    try {
+      const newGuidelines = await extractGuidelines(sessionDiffs, runDir, guidelines);
+      if (newGuidelines.length > 0) {
+        const added = await writeGuidelines(newGuidelines);
+        if (added > 0) {
+          console.log(`[Memory]        — saved ${added} new design guideline(s)`);
+        }
+      }
+    } catch (err) {
+      console.warn(`  [Pipeline] could not save guidelines: ${String(err)}`);
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -234,7 +234,6 @@ async function main(): Promise<void> {
   Component:      ${componentName}
   File:           ${SANDBOX_COMPONENT_PATH}
   Iterations:     ${debugIterations.length}
-  Fidelity score: ${finalDiff ? `${(finalDiff.fidelityScore * 100).toFixed(1)}%` : "n/a"}
   Debug dir:      ${runDir}
 `);
 

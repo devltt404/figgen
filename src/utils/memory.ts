@@ -15,7 +15,7 @@ const MEMORY_DIR = path.resolve(
   "../../output/memory",
 );
 const GUIDELINES_PATH = path.join(MEMORY_DIR, "guidelines.md");
-const MAX_GUIDELINES = 30;
+const MAX_GUIDELINES = 10;
 
 /**
  * Read all guideline texts from the plain-text file.

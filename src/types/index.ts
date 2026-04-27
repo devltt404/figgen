@@ -31,9 +31,11 @@ export const DiffIssueSchema = z.object({
 });
 export type DiffIssue = z.infer<typeof DiffIssueSchema>;
 
-// DiffReport — the full set of diff issues + an overall fidelity score (0–1)
+// DiffReport — the full set of diff issues + a one-line summary.
+// Note: there is no numeric fidelity score. Iteration count is the sole stop
+// criterion; the judge produces only critiques (issues) for the codegen agent
+// to act on.
 export const DiffReportSchema = z.object({
-  fidelityScore: z.number().min(0).max(1),
   issues: z.array(DiffIssueSchema),
   summary: z.string(),
 });

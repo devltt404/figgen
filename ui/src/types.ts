@@ -9,14 +9,14 @@ export type PipelineEvent =
   | { type: "figma_screenshot"; screenshot: string }
   | { type: "codegen_done"; componentName: string; lines: number; tsx: string; mode: "generate" | "refine"; iteration: number }
   | { type: "render_done"; iteration: number; screenshot: string }
-  | { type: "judge_done"; iteration: number; fidelityScore: number; issues: DiffIssue[]; summary: string }
+  | { type: "judge_done"; iteration: number; issues: DiffIssue[]; summary: string }
   | { type: "memory_updated"; guidelinesCount: number }
-  | { type: "done"; componentName: string; iterations: number; fidelityScore: number | null }
+  | { type: "done"; componentName: string; iterations: number; finalIssueCount: number | null }
   | { type: "error"; message: string };
 
 export interface IterationData {
   iteration: number;
   tsx?: string;
   screenshot?: string;
-  diff?: { fidelityScore: number; issues: DiffIssue[]; summary: string };
+  diff?: { issues: DiffIssue[]; summary: string };
 }

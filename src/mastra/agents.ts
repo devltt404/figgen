@@ -17,7 +17,7 @@ const agentModel = (() => {
     return createOpenAI({ baseURL: 'https://openrouter.ai/api/v1', apiKey: process.env.OPENROUTER_API_KEY })(model);
   }
   if (process.env.OPENAI_API_KEY) {
-    return openai(process.env.OPENAI_MODEL ?? 'gpt-5.4-nano');
+    return openai(process.env.OPENAI_MODEL ?? 'gpt-5.5-pro');
   }
   if (process.env.OLLAMA_MODEL) {
     return createOllama({ baseURL: process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434/api' })(process.env.OLLAMA_MODEL);
