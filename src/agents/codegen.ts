@@ -9,10 +9,11 @@
  */
 
 import "dotenv/config";
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { GeneratedComponent, DiffReport } from "../types/index.js";
-import { fetchFigmaDesignContext, parseFigmaUrl } from "../utils/figma.js";
+import { fetchFigmaNodeJson, fetchFigmaScreenshot, parseFigmaUrl } from "../utils/figma.js";
 import { readCache, writeCache } from "../utils/llm-cache.js";
 import { createLLMClient } from "../utils/llm-client.js";
 
@@ -53,10 +54,19 @@ You are an expert React + Tailwind CSS engineer who converts structured Figma de
 
 ## Generation mode
 
-You receive YAML data exported from a Figma file via the figma-developer-mcp tool. Two main keys relevant for code generation:
+You receive two inputs:
 
-- \`nodes\` — the component tree. Each node has a name, type, and refs to layout/fill/style tokens (e.g. layout_ABC, fill_XYZ, style_123).
-- \`globalVars\` — the resolved token definitions. Cross-reference node refs here to get exact values (colors, spacing, font sizes, radii, shadows, etc).
+1. **JSON tree** — the design's node structure straight from the Figma REST API (\`/v1/files/:key/nodes\`), pruned to remove noise. Read it for exact tokens:
+   - Colors live in \`fills[].color\` as RGBA floats in 0..1 (separate \`opacity\`/\`a\`). Convert to hex: e.g. \`{r:0.18,g:0.42,b:0.87,a:1}\` → \`#2e6bde\`.
+   - Typography in \`style\`: \`fontFamily\`, \`fontSize\`, \`fontWeight\`, \`lineHeightPx\`, \`letterSpacing\`, \`textAlignHorizontal\`.
+   - Layout in \`layoutMode\` (\`HORIZONTAL\`/\`VERTICAL\`/\`NONE\`), \`itemSpacing\`, \`paddingLeft/Right/Top/Bottom\`, \`primaryAxisAlignItems\`, \`counterAxisAlignItems\`.
+   - Geometry in \`absoluteBoundingBox\` (x, y, width, height — pixel values).
+   - Corners in \`cornerRadius\` (uniform) or \`rectangleCornerRadii\` ([tl, tr, br, bl]).
+   - Shadows/effects in \`effects\` (type \`DROP_SHADOW\`/\`INNER_SHADOW\` with \`offset\`, \`radius\`, \`color\`).
+   - Text content in \`characters\`.
+2. **PNG screenshot** — the rendered Figma frame, attached as an image. Treat it as the visual ground truth. Use it to disambiguate when the JSON is ambiguous (e.g. icon shapes, exact appearance of a stroke).
+
+Cross-reference both: the JSON gives you exact numeric tokens; the image confirms layout, shape, and visual hierarchy.
 
 ## Refinement mode
 
@@ -159,8 +169,15 @@ export async function runCodegen(
   // Build system prompt with guidelines
   const systemPrompt = buildSystemPrompt(guidelines);
 
-  // Build user message depending on mode
+  // Build user message depending on mode.
+  // - Refinement: plain string (the diff report has all the info needed)
+  // - Generation: multimodal array (JSON text + Figma screenshot image)
+  type UserContentPart =
+    | { type: "text"; text: string }
+    | { type: "image_url"; image_url: { url: string; detail: "high" | "low" | "auto" } };
   let userText: string;
+  let userContent: string | UserContentPart[];
+  let cacheUserKey: string;
 
   if (isRefinement) {
     userText = `Current TSX to fix:
@@ -181,18 +198,20 @@ Instructions:
 2. For each issue, locate the exact element in the TSX and determine the fix.
 3. Output the complete fixed TSX with every issue resolved.
 4. Do not change anything not mentioned in the issues.`;
+    userContent = userText;
+    cacheUserKey = userText;
   } else {
     console.log("  [Codegen] fetching design context…");
-    const designContext = await fetchFigmaDesignContext(figmaUrl).catch(
-      () => null,
+    const [designContext, screenshotB64] = await Promise.all([
+      fetchFigmaNodeJson(figmaUrl),
+      fetchFigmaScreenshot(figmaUrl),
+    ]);
+    console.log(
+      `  [Codegen] design context fetched (JSON ${Math.round(designContext.jsonString.length / 1024)} KB, screenshot ${Math.round(screenshotB64.length / 1024)} KB)`,
     );
-
-    if (!designContext) {
-      throw new Error("[Codegen] no design data available — terminating process");
+    if (debugDir) {
+      await writeDebug(debugDir, "design-context.json", designContext.jsonString);
     }
-    console.log("  [Codegen] design context fetched");
-    if (debugDir)
-      await writeDebug(debugDir, "design-context.txt", designContext.text);
 
     if (process.env.STOP_AFTER_FIGMA === "1") {
       console.log(
@@ -201,17 +220,41 @@ Instructions:
       process.exit(0);
     }
 
-    userText = `FIGMA DATA:\n${designContext.text}`;
+    userText = `FIGMA NODE JSON (pruned from /v1/files/:key/nodes):
+\`\`\`json
+${designContext.jsonString}
+\`\`\`
+
+The image attached below is the rendered Figma frame — your visual ground truth. Use the JSON for exact numeric tokens (colors, sizes, spacing, fonts) and the image to confirm layout, shapes, and visual hierarchy.`;
+
+    userContent = [
+      { type: "text", text: userText },
+      {
+        type: "image_url",
+        image_url: { url: `data:image/png;base64,${screenshotB64}`, detail: "high" },
+      },
+    ];
+
+    const screenshotHash = crypto
+      .createHash("sha256")
+      .update(screenshotB64)
+      .digest("hex")
+      .slice(0, 16);
+    cacheUserKey = `${userText}\n[image:${screenshotHash}]`;
   }
 
   // Debug artifacts
   const iterSuffix = iter != null ? `-${iter}` : "";
   const debugPrefix = isRefinement ? `refine${iterSuffix}` : "codegen";
   if (debugDir)
-    await writeDebug(debugDir, `${debugPrefix}-prompt.txt`, `=== SYSTEM ===\n${systemPrompt}\n\n=== USER ===\n${userText}`);
+    await writeDebug(
+      debugDir,
+      `${debugPrefix}-prompt.txt`,
+      `=== SYSTEM ===\n${systemPrompt}\n\n=== USER ===\n${userText}${isRefinement ? "" : "\n\n[+ Figma screenshot attached as image_url]"}`,
+    );
 
   // LLM call (with cache)
-  const cached = await readCache(model, systemPrompt, userText);
+  const cached = await readCache(model, systemPrompt, cacheUserKey);
   let rawTsx: string;
   if (cached) {
     console.log(`  [Codegen] cache hit — skipping LLM call`);
@@ -224,14 +267,15 @@ Instructions:
         max_completion_tokens: 16384,
         messages: [
           { role: "system", content: systemPrompt },
-          { role: "user", content: userText },
+          // OpenAI typings expect a string here when content is mixed; cast — the SDK accepts the multimodal array shape at runtime.
+          { role: "user", content: userContent as unknown as string },
         ],
       });
       rawTsx = response.choices[0]?.message?.content ?? "";
     } catch (err) {
       throw new Error(`Codegen Agent — ${provider} call failed: ${String(err)}`);
     }
-    await writeCache(model, systemPrompt, userText, rawTsx);
+    await writeCache(model, systemPrompt, cacheUserKey, rawTsx);
   }
 
   if (!rawTsx.trim()) {

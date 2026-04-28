@@ -1,5 +1,3 @@
-import { Client } from "@modelcontextprotocol/sdk/client";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio";
 import "dotenv/config";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
@@ -158,111 +156,178 @@ export async function getFigmaNodeSize(
   }
 }
 
-export interface FigmaDesignContext {
-  text: string;
-  metadata: string;
-}
+// ---------------------------------------------------------------------------
+// Pruning — strip noise from the raw Figma node tree before sending to LLMs
+// ---------------------------------------------------------------------------
 
-async function createMcpClient(token: string): Promise<Client> {
-  const transport = new StdioClientTransport({
-    command: "npx",
-    args: ["-y", "figma-developer-mcp", "--figma-api-key", token, "--stdio"],
-  });
-  const client = new Client({ name: "figgen", version: "1.0.0" }, { capabilities: {} });
-  console.log("  [Figma] connecting to figma-developer-mcp…");
-  await client.connect(transport, { timeout: 10_000 });
-  console.log("  [Figma] connected");
-  return client;
-}
+const STRIP_FIELDS = new Set([
+  "exportSettings",
+  "blendMode",
+  "preserveRatio",
+  "constraints",
+  "layoutAlign",
+  "layoutGrow",
+  "layoutPositioning",
+  "interactions",
+  "transitionNodeID",
+  "transitionDuration",
+  "transitionEasing",
+  "fillGeometry",
+  "strokeGeometry",
+  "relativeTransform",
+  "size",
+  "isFixed",
+  "scrollBehavior",
+  "componentPropertyReferences",
+  "boundVariables",
+  "explicitVariableModes",
+  "fillOverrideTable",
+  "annotations",
+  "devStatus",
+  "stackCounterAlignContent",
+  "stackCounterAlignItems",
+  "stackPrimaryAlignItems",
+  "stackPrimarySizing",
+  "stackCounterSizing",
+  "stackJustify",
+  "stackMode",
+  "stackPadding",
+]);
 
-async function closeMcpClient(client: Client): Promise<void> {
-  await Promise.race([client.close(), new Promise<void>((r) => setTimeout(r, 3_000))]);
-}
-
-export async function fetchFigmaDesignContext(
-  figmaUrl: string,
-): Promise<FigmaDesignContext | null> {
-  const token = process.env.FIGMA_ACCESS_TOKEN;
-  if (!token) {
-    console.warn("  [Figma] FIGMA_ACCESS_TOKEN is not set");
-    return null;
+function pruneFill(fill: Record<string, unknown>): Record<string, unknown> | null {
+  const type = fill["type"];
+  if (type === "IMAGE") {
+    return { type: "IMAGE", placeholder: true };
   }
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(fill)) {
+    if (k === "imageRef" || k === "gifRef") continue;
+    if (v === null || v === undefined) continue;
+    if (Array.isArray(v) && v.length === 0) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
+function pruneNode(node: unknown): unknown {
+  if (Array.isArray(node)) {
+    return node.map(pruneNode).filter((v) => v !== undefined);
+  }
+  if (node === null || typeof node !== "object") return node;
+
+  const obj = node as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(obj)) {
+    if (STRIP_FIELDS.has(key)) continue;
+    if (value === null || value === undefined) continue;
+    if (Array.isArray(value) && value.length === 0) continue;
+    if (key === "visible" && value === true) continue;
+    if (key === "clipsContent" && value === false) continue;
+
+    if (key === "fills" || key === "strokes") {
+      if (!Array.isArray(value)) continue;
+      const pruned = value
+        .map((f) => (typeof f === "object" && f !== null ? pruneFill(f as Record<string, unknown>) : f))
+        .filter((v) => v !== null && v !== undefined);
+      if (pruned.length === 0) continue;
+      out[key] = pruned;
+      continue;
+    }
+
+    if (key === "absoluteBoundingBox" || key === "absoluteRenderBounds") {
+      if (typeof value === "object" && value !== null) {
+        const bbox = value as Record<string, number>;
+        out[key] = {
+          x: Math.round(bbox.x ?? 0),
+          y: Math.round(bbox.y ?? 0),
+          width: Math.round(bbox.width ?? 0),
+          height: Math.round(bbox.height ?? 0),
+        };
+      }
+      continue;
+    }
+
+    if (key === "children" && Array.isArray(value)) {
+      const pruned = value.map(pruneNode).filter((v) => v !== undefined);
+      if (pruned.length === 0) continue;
+      out[key] = pruned;
+      continue;
+    }
+
+    if (typeof value === "object") {
+      out[key] = pruneNode(value);
+      continue;
+    }
+
+    out[key] = value;
+  }
+
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// REST API: node JSON metadata
+// ---------------------------------------------------------------------------
+
+export interface FigmaDesignContext {
+  json: unknown;
+  jsonString: string;
+}
+
+export async function fetchFigmaNodeJson(
+  figmaUrl: string,
+): Promise<FigmaDesignContext> {
+  const token = process.env.FIGMA_ACCESS_TOKEN;
+  if (!token) throw new Error("FIGMA_ACCESS_TOKEN is not set");
 
   const { fileKey, nodeId } = parseFigmaUrl(figmaUrl);
   console.log(`  [Figma] fileKey=${fileKey} nodeId=${nodeId}`);
 
-  const designCacheKey = figmaCacheKey("design", fileKey, nodeId);
-  const screenshotCacheKey = figmaCacheKey("screenshot", fileKey, nodeId);
-
-  const cachedDesign = await readFigmaCache<FigmaDesignContext>(designCacheKey);
-  const cachedScreenshot = await readFigmaCache<{ b64: string }>(screenshotCacheKey);
-  if (cachedDesign && cachedScreenshot) {
-    console.log("  [Figma] design + screenshot cache hit");
-    return cachedDesign;
+  const cacheKey = figmaCacheKey("nodejson", fileKey, nodeId);
+  const cached = await readFigmaCache<FigmaDesignContext>(cacheKey);
+  if (cached) {
+    console.log("  [Figma] node JSON cache hit");
+    return cached;
   }
 
-  const screenshotDir = path.resolve(
-    path.dirname(fileURLToPath(import.meta.url)),
-    "../../output/figma-cache/screenshots",
+  console.log("  [Figma] GET /v1/files/.../nodes …");
+  const res = await fetch(
+    `https://api.figma.com/v1/files/${fileKey}/nodes?ids=${encodeURIComponent(nodeId)}`,
+    { headers: { "X-Figma-Token": token } },
   );
-  await fs.mkdir(screenshotDir, { recursive: true });
-  const screenshotFileName = `${screenshotCacheKey}.png`;
-
-  const client = await createMcpClient(token);
-  try {
-    const [dataResult, imageResult] = await Promise.all([
-      cachedDesign
-        ? Promise.resolve(null)
-        : client.callTool({ name: "get_figma_data", arguments: { fileKey, nodes: { nodeId } } }),
-      cachedScreenshot
-        ? Promise.resolve(null)
-        : client.callTool({
-            name: "download_figma_images",
-            arguments: {
-              fileKey,
-              nodes: [{ nodeId, fileName: screenshotFileName }],
-              localPath: path.relative(process.cwd(), screenshotDir),
-              pngScale: 2,
-            },
-          }),
-    ]);
-
-    if (dataResult) {
-      if (dataResult.isError) {
-        const msg = (dataResult.content as Array<{ text?: string }>)[0]?.text ?? "unknown error";
-        throw new Error(`get_figma_data failed: ${msg}`);
-      }
-      console.log("  [Figma] get_figma_data done");
-    }
-
-    if (imageResult) {
-      if (imageResult.isError) {
-        const msg = (imageResult.content as Array<{ text?: string }>)[0]?.text ?? "unknown error";
-        throw new Error(`download_figma_images failed: ${msg}`);
-      }
-      console.log("  [Figma] download_figma_images done");
-      const buffer = await fs.readFile(path.join(screenshotDir, screenshotFileName));
-      await writeFigmaCache(screenshotCacheKey, { b64: buffer.toString("base64") });
-    }
-
-    if (cachedDesign) return cachedDesign;
-
-    type Item = { type: string; text?: string };
-    const text = (dataResult!.content as Item[])
-      .filter((c) => c.type === "text")
-      .map((c) => c.text ?? "")
-      .join("\n\n");
-
-    const result: FigmaDesignContext = { text, metadata: "" };
-    await writeFigmaCache(designCacheKey, result);
-    return result;
-  } catch (err) {
-    console.warn("  [Figma] fetchFigmaDesignContext failed:", err);
-    return null;
-  } finally {
-    await closeMcpClient(client);
+  if (!res.ok) {
+    throw new Error(
+      `Figma /v1/files/${fileKey}/nodes failed: ${res.status} ${res.statusText}`,
+    );
   }
+
+  const data = (await res.json()) as {
+    nodes: Record<string, { document?: unknown } | undefined>;
+  };
+  const docRaw =
+    data.nodes?.[nodeId]?.document ??
+    data.nodes?.[nodeId.replace(":", "-")]?.document;
+  if (!docRaw) {
+    throw new Error(
+      `Figma response did not include node ${nodeId} (got keys: ${Object.keys(data.nodes ?? {}).join(", ")})`,
+    );
+  }
+
+  const pruned = pruneNode(docRaw);
+  const jsonString = JSON.stringify(pruned, null, 2);
+  console.log(
+    `  [Figma] node JSON pruned (${Math.round(jsonString.length / 1024)} KB)`,
+  );
+
+  const result: FigmaDesignContext = { json: pruned, jsonString };
+  await writeFigmaCache(cacheKey, result);
+  return result;
 }
+
+// ---------------------------------------------------------------------------
+// REST API: screenshot
+// ---------------------------------------------------------------------------
 
 export async function fetchFigmaScreenshot(figmaUrl: string): Promise<string> {
   const token = process.env.FIGMA_ACCESS_TOKEN;
@@ -271,38 +336,51 @@ export async function fetchFigmaScreenshot(figmaUrl: string): Promise<string> {
   const { fileKey, nodeId } = parseFigmaUrl(figmaUrl);
   const cacheKey = figmaCacheKey("screenshot", fileKey, nodeId);
   const cached = await readFigmaCache<{ b64: string }>(cacheKey);
-  if (cached) return cached.b64;
-
-  // fetchFigmaDesignContext was not called first — connect and download now
-  const screenshotDir = path.resolve(
-    path.dirname(fileURLToPath(import.meta.url)),
-    "../../output/figma-cache/screenshots",
-  );
-  await fs.mkdir(screenshotDir, { recursive: true });
-  const fileName = `${cacheKey}.png`;
-
-  const client = await createMcpClient(token);
-  try {
-    const toolResult = await client.callTool({
-      name: "download_figma_images",
-      arguments: {
-        fileKey,
-        nodes: [{ nodeId, fileName }],
-        localPath: path.relative(process.cwd(), screenshotDir),
-        pngScale: 2,
-      },
-    });
-    if (toolResult.isError) {
-      const msg = (toolResult.content as Array<{ text?: string }>)[0]?.text ?? "unknown error";
-      throw new Error(`download_figma_images failed: ${msg}`);
-    }
-    console.log("  [Figma] download_figma_images done");
-  } finally {
-    await closeMcpClient(client);
+  if (cached) {
+    console.log("  [Figma] screenshot cache hit");
+    return cached.b64;
   }
 
-  const buffer = await fs.readFile(path.join(screenshotDir, fileName));
-  const b64 = buffer.toString("base64");
+  console.log("  [Figma] GET /v1/images/... …");
+  const imgRes = await fetch(
+    `https://api.figma.com/v1/images/${fileKey}?ids=${encodeURIComponent(nodeId)}&format=png&scale=2`,
+    { headers: { "X-Figma-Token": token } },
+  );
+  if (!imgRes.ok) {
+    throw new Error(
+      `Figma /v1/images/${fileKey} failed: ${imgRes.status} ${imgRes.statusText}`,
+    );
+  }
+
+  const imgData = (await imgRes.json()) as {
+    err?: string | null;
+    images: Record<string, string | null>;
+  };
+  if (imgData.err) throw new Error(`Figma /v1/images error: ${imgData.err}`);
+
+  const cdnUrl =
+    imgData.images?.[nodeId] ?? imgData.images?.[nodeId.replace(":", "-")];
+  if (!cdnUrl) {
+    throw new Error(
+      `Figma /v1/images returned no URL for node ${nodeId} (got: ${JSON.stringify(imgData.images)})`,
+    );
+  }
+
+  const pngRes = await fetch(cdnUrl);
+  if (!pngRes.ok) {
+    throw new Error(
+      `Figma image CDN fetch failed: ${pngRes.status} ${pngRes.statusText}`,
+    );
+  }
+  const buf = Buffer.from(await pngRes.arrayBuffer());
+  const b64 = buf.toString("base64");
+
+  // Also persist the PNG file for debugging convenience.
+  const screenshotDir = path.join(FIGMA_CACHE_DIR, "screenshots");
+  await fs.mkdir(screenshotDir, { recursive: true });
+  await fs.writeFile(path.join(screenshotDir, `${cacheKey}.png`), buf);
+
   await writeFigmaCache(cacheKey, { b64 });
+  console.log(`  [Figma] screenshot fetched (${Math.round(buf.length / 1024)} KB)`);
   return b64;
 }

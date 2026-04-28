@@ -77,7 +77,7 @@ All agent inputs/outputs are defined as Zod schemas in `src/types/index.ts`: `Ge
 
 ### Figma integration (src/utils/figma.ts)
 
-Uses two approaches: the `figma-developer-mcp` server (via `@modelcontextprotocol/sdk`) for structured node data, and the REST API for screenshots. `parseFigmaUrl` extracts fileKey + nodeId from any Figma URL.
+Uses the Figma REST API directly: `/v1/files/:key/nodes` for the node tree (passed through `pruneNode` to strip noise) and `/v1/images` for the rendered PNG screenshot. The pruned JSON + screenshot are both fed to the Codegen agent (multimodal). `parseFigmaUrl` extracts fileKey + nodeId from any Figma URL.
 
 ## Environment Variables
 

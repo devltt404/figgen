@@ -22,7 +22,7 @@ export function createLLMClient(modelEnvOverride?: string): LLMClient {
         baseURL: "https://router.requesty.ai/v1",
         apiKey: process.env.REQUESTY_API_KEY,
       }),
-      model: modelEnvOverride ?? process.env.REQUESTY_MODEL ?? "openai-responses/gpt-5.4-nano",
+      model: modelEnvOverride ?? process.env.REQUESTY_MODEL ?? "openai/gpt-5.4-nano",
       provider: "Requesty",
     };
   }
