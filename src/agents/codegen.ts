@@ -1,19 +1,22 @@
 /**
- * Codegen Agent — src/agents/codegen.ts
+ * Codegen Agent — generates or refines a React TSX component.
  *
- * Unified agent that handles both initial code generation and refinement.
- * - Generation mode: receives Figma data, produces React TSX
- * - Refinement mode: receives existing TSX + DiffReport, applies surgical fixes
+ * Generation mode: receives a Figma URL → fetches design JSON + screenshot →
+ *   produces TSX (multimodal LLM call).
+ * Refinement mode: receives existing TSX + a DiffReport → applies surgical fixes.
  *
- * Both modes optionally incorporate long-term design guidelines from memory.
+ * Both modes optionally consume design guidelines from long-term memory.
  */
 
 import "dotenv/config";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { GeneratedComponent, DiffReport } from "../types/index.js";
-import { fetchFigmaDesignContext, parseFigmaUrl } from "../utils/figma.js";
-import { readCache, writeCache } from "../utils/llm-cache.js";
+import type { DiffReport, GeneratedComponent } from "../types/index.js";
+import {
+  fetchFigmaNodeJson,
+  fetchFigmaScreenshot,
+  parseFigmaUrl,
+} from "../utils/figma.js";
 import { createLLMClient } from "../utils/llm-client.js";
 
 function stripFences(raw: string): string {
@@ -53,18 +56,39 @@ You are an expert React + Tailwind CSS engineer who converts structured Figma de
 
 ## Generation mode
 
-You receive YAML data exported from a Figma file via the figma-developer-mcp tool. Two main keys relevant for code generation:
+You receive two inputs:
 
-- \`nodes\` — the component tree. Each node has a name, type, and refs to layout/fill/style tokens (e.g. layout_ABC, fill_XYZ, style_123).
-- \`globalVars\` — the resolved token definitions. Cross-reference node refs here to get exact values (colors, spacing, font sizes, radii, shadows, etc).
+1. **JSON tree** — the design's node structure straight from the Figma REST API (\`/v1/files/:key/nodes\`), pruned to remove noise. Read it for exact tokens:
+   - Colors live in \`fills[].color\` as RGBA floats in 0..1 (separate \`opacity\`/\`a\`). Convert to hex: e.g. \`{r:0.18,g:0.42,b:0.87,a:1}\` → \`#2e6bde\`.
+   - Typography in \`style\`: \`fontFamily\`, \`fontSize\`, \`fontWeight\`, \`lineHeightPx\`, \`letterSpacing\`, \`textAlignHorizontal\`.
+   - Layout in \`layoutMode\` (\`HORIZONTAL\`/\`VERTICAL\`/\`NONE\`), \`itemSpacing\`, \`paddingLeft/Right/Top/Bottom\`, \`primaryAxisAlignItems\`, \`counterAxisAlignItems\`.
+   - Geometry in \`absoluteBoundingBox\` (x, y, width, height — pixel values).
+   - Corners in \`cornerRadius\` (uniform) or \`rectangleCornerRadii\` ([tl, tr, br, bl]).
+   - Shadows/effects in \`effects\` (type \`DROP_SHADOW\`/\`INNER_SHADOW\` with \`offset\`, \`radius\`, \`color\`).
+   - Text content in \`characters\`.
+   - Image assets: a fill with \`type:"IMAGE"\` and an \`imageRef\` whose value starts with \`/figma-assets/\` is a real PNG already saved on disk. Render it as \`<img src="<imageRef>" alt="" />\` or as a CSS background via Tailwind arbitrary value: \`bg-[url('<imageRef>')] bg-cover bg-center\`. Honor the \`scaleMode\` field: \`FILL\`→\`bg-cover\`/\`object-cover\`, \`FIT\`→\`bg-contain\`/\`object-contain\`, \`TILE\`→\`bg-repeat\`, \`STRETCH\`→\`object-fill\`. If a fill has \`resolved:false\`, the asset wasn't available — fall back to a neutral placeholder (e.g. \`bg-neutral-200\`).
+2. **PNG screenshot** — the rendered Figma frame, attached as an image. Treat it as the visual ground truth. Use it to disambiguate when the JSON is ambiguous (e.g. icon shapes, exact appearance of a stroke).
+
+Cross-reference both: the JSON gives you exact numeric tokens; the image confirms layout, shape, and visual hierarchy.
 
 ## Refinement mode
 
 When you receive existing TSX code along with a diff report of visual issues, apply minimal, surgical fixes to resolve each issue.
-- Do NOT rewrite the whole component — make targeted changes only.
-- Keep all existing Tailwind classes that are correct; only change what the issues describe.
-- NEVER change colors, fonts, or content that are not explicitly mentioned in the issues list.
+
+### Mandatory rules:
+- You MUST address EVERY issue listed in the diff report. Do not skip any.
+- Do NOT rewrite the whole component — make targeted, surgical changes only.
+- For each issue, find the EXACT element described and change ONLY the property mentioned.
+- Keep all existing Tailwind classes that are correct. Do NOT change anything that isn't in the issues list.
 - Preserve the component's named export exactly.
+
+### CRITICAL — do not introduce regressions:
+- Before changing any line, ask yourself: "Is this line mentioned in the issues?" If not, DO NOT TOUCH IT.
+- Do NOT reorganize, reformat, or restructure code that is working correctly.
+- Do NOT change colors, font sizes, spacing, or border-radius values unless a specific issue tells you to.
+- Do NOT remove classes or elements that aren't mentioned in the issues.
+- The ONLY lines you should change are the ones directly targeted by the issue descriptions.
+- Your output should be as close to the input as possible, with minimal diff.
 
 ## Output rules
 
@@ -76,10 +100,96 @@ When you receive existing TSX code along with a diff report of visual issues, ap
     spacing     → p-[40px]      gap-[24px]    px-[12px] py-[6px]
     radius      → rounded-[16px]  rounded-[99px]
     shadows     → shadow-[0px_8px_24px_0px_rgba(0,0,0,0.08)]
+- NEVER use approximate Tailwind utility classes when the design specifies exact values.
+    WRONG: p-4 (16px) when the design says 18px → RIGHT: p-[18px]
+    WRONG: text-lg when the design says 22px → RIGHT: text-[22px]
+    WRONG: bg-blue-600 when the design says #2e6bde → RIGHT: bg-[#2e6bde]
+    WRONG: rounded-lg when the design says 12px → RIGHT: rounded-[12px]
+- Match flex directions and alignment exactly. If the design has a vertical stack, use flex-col. If items are center-aligned, use items-center. Pay attention to justify-content vs align-items.
+- Pay attention to the root element's layout: flex vs block, row vs column, and whether the content is centered or edge-aligned.
 - Use semantic HTML: nav, header, main, section, article, footer, button, a, h1-h6, p, ul, li where appropriate.
-- For font family: use the exact font name from the token.
 - The component must render at its natural/intrinsic size matching the design frame. Do NOT add min-h-screen or w-full to the root element.
 - No interactivity or state unless explicitly visible in the design.
+
+## Fonts
+
+When TEXT nodes have \`style.fontFamily\`, you MUST load the font and apply it. Follow this exact procedure:
+
+### Step 1 — split the Figma fontFamily into a base family and a weight
+
+Figma stores the variant in the family name itself (e.g. \`"Gilroy-SemiBold"\`, \`"Inter-Bold"\`). The numeric \`fontWeight\` field is unreliable for variant fonts — derive weight from the suffix:
+
+| Suffix | Weight | Tailwind |
+|---|---|---|
+| -Thin / -Hairline | 100 | font-thin |
+| -ExtraLight / -UltraLight | 200 | font-extralight |
+| -Light | 300 | font-light |
+| -Regular / -Normal / (no suffix) | 400 | font-normal |
+| -Medium | 500 | font-medium |
+| -SemiBold / -DemiBold | 600 | font-semibold |
+| -Bold | 700 | font-bold |
+| -ExtraBold / -UltraBold | 800 | font-extrabold |
+| -Black / -Heavy | 900 | font-black |
+
+Add \`-italic\` to the weight class if the suffix includes \`Italic\` / \`Oblique\` (\`italic\` Tailwind utility).
+
+So \`"Gilroy-SemiBold"\` → base \`"Gilroy"\`, weight 600 → \`font-semibold\`.
+
+### Step 2 — emit ONE inline \`<style>\` tag at the very top of the root JSX
+
+Combine every unique base family into a single Google Fonts \`@import url(...)\` request, asking for all common weights so the browser has every variant available. Place this as the FIRST child of the root element:
+
+\`\`\`tsx
+<style>{\`@import url('https://fonts.googleapis.com/css2?family=Gilroy:wght@300;400;500;600;700;800;900&family=Inter:wght@300;400;500;600;700;800;900&display=swap');\`}</style>
+\`\`\`
+
+Rules:
+- Replace spaces in family names with \`+\` (e.g. \`"Open Sans"\` → \`Open+Sans\`).
+- Use \`&family=...\` to chain multiple families in ONE URL — never emit multiple \`<style>\` tags or multiple \`<link>\` elements.
+- Always include \`&display=swap\` so text stays visible while the font loads.
+- The inline string MUST use template-literal backticks so the URL's single quotes inside don't break JSX, and you DO NOT need \`dangerouslySetInnerHTML\`.
+
+### Step 3 — apply on every text element using Tailwind arbitrary values
+
+For each text element, emit BOTH the base family AND the derived weight:
+
+\`\`\`tsx
+<p className="font-['Gilroy'] font-semibold text-[30px] leading-[39px] ...">What is the name...</p>
+\`\`\`
+
+Rules for the family arbitrary value:
+- Use SINGLE quotes inside the brackets: \`font-['Gilroy']\`.
+- Multi-word families: replace spaces with underscores: \`font-['Open_Sans']\`, \`font-['Plus_Jakarta_Sans']\`. Tailwind decodes underscores back to spaces.
+- DO NOT include the \`-SemiBold\` / \`-Bold\` suffix in the family — it's encoded by the weight class instead. Wrong: \`font-['Gilroy-SemiBold']\`. Right: \`font-['Gilroy'] font-semibold\`.
+
+### Worked example
+
+Given JSON like:
+\`\`\`json
+{ "characters": "Hello", "style": { "fontFamily": "Gilroy-Bold", "fontSize": 16, "letterSpacing": 0.4, "lineHeightPx": 24 } }
+\`\`\`
+
+Emit:
+\`\`\`tsx
+<p className="font-['Gilroy'] font-bold text-[16px] leading-[24px] tracking-[0.4px]">Hello</p>
+\`\`\`
+
+If the design uses three families like Gilroy (multiple weights), Inter, and Roboto, the single \`<style>\` tag becomes:
+
+\`\`\`tsx
+<style>{\`@import url('https://fonts.googleapis.com/css2?family=Gilroy:wght@300;400;500;600;700;800;900&family=Inter:wght@300;400;500;600;700;800;900&family=Roboto:wght@300;400;500;600;700;800;900&display=swap');\`}</style>
+\`\`\`
+
+## Shapes and small elements (pay extra attention)
+
+Small shapes, icons, and decorative elements are the most common source of errors. Follow these rules:
+- Circles: use rounded-full (not rounded-lg or rounded-xl). If the design shows a circle, it MUST be rounded-full.
+- Pills/capsules: use rounded-full for fully-rounded ends on badges, tags, and pill buttons.
+- Exact border-radius: use the token value as rounded-[Npx], never approximate with rounded-sm/md/lg.
+- Icons: render SVG inline or use a span with the correct dimensions. Match the exact icon shape — arrows, chevrons, dots, checkmarks, etc.
+- Status dots/indicators: small colored circles should use exact dimensions (e.g. w-[8px] h-[8px] rounded-full).
+- Dividers: render as border or <hr> with exact color and thickness from the token.
+- Avatar containers: match the exact shape (circle vs rounded-square) and size from the design.
 `;
 
 // ---------------------------------------------------------------------------
@@ -95,8 +205,21 @@ export interface CodegenOptions {
 }
 
 function formatIssues(diff: DiffReport): string {
-  return diff.issues
-    .map((issue, i) => `${i + 1}. [${issue.category}] ${issue.description}`)
+  const severityOrder: Record<string, number> = {
+    critical: 0,
+    moderate: 1,
+    minor: 2,
+  };
+  const sorted = [...diff.issues].sort(
+    (a, b) =>
+      (severityOrder[a.severity ?? "moderate"] ?? 1) -
+      (severityOrder[b.severity ?? "moderate"] ?? 1),
+  );
+  return sorted
+    .map(
+      (issue, i) =>
+        `${i + 1}. [${issue.category}]${issue.severity ? ` (${issue.severity})` : ""} ${issue.description}`,
+    )
     .join("\n\n");
 }
 
@@ -117,43 +240,63 @@ export async function runCodegen(
   const { existingComponent, diffReport, guidelines, debugDir, iter } = options;
   const isRefinement = !!(existingComponent && diffReport);
 
-  const { client, model, provider } = createLLMClient();
+  const { client, model } = createLLMClient();
 
   const { componentName: componentNameHint } = parseFigmaUrl(figmaUrl);
   const mode = isRefinement ? "refine" : "generate";
-  console.log(`  [Codegen] mode: ${mode} | backend: ${provider} (${model})`);
+  console.log(`  [Codegen] mode: ${mode} | model: ${model}`);
 
   // Build system prompt with guidelines
   const systemPrompt = buildSystemPrompt(guidelines);
 
-  // Build user message depending on mode
+  // Build user message depending on mode.
+  // - Refinement: plain string (the diff report has all the info needed)
+  // - Generation: multimodal array (JSON text + Figma screenshot image)
+  type UserContentPart =
+    | { type: "text"; text: string }
+    | {
+        type: "image_url";
+        image_url: { url: string; detail: "high" | "low" | "auto" };
+      };
   let userText: string;
+  let userContent: string | UserContentPart[];
 
   if (isRefinement) {
-    userText = `Current fidelity score: ${(diffReport.fidelityScore * 100).toFixed(1)}%
-Summary: ${diffReport.summary}
-
-Issues to fix:
-${formatIssues(diffReport)}
-
-Current TSX:
+    userText = `Current TSX to fix:
 \`\`\`tsx
 ${existingComponent.tsx}
 \`\`\`
 
-Return the fixed TSX.`;
-  } else {
-    console.log("  [Codegen] fetching design context…");
-    const designContext = await fetchFigmaDesignContext(figmaUrl).catch(
-      () => null,
-    );
+Summary: ${diffReport.summary}
 
-    if (!designContext) {
-      throw new Error("[Codegen] no design data available — terminating process");
+A visual reviewer compared the Figma design screenshot against the rendered component screenshot and found ${diffReport.issues.length} issue(s). You CANNOT see either image — you must trust these descriptions exactly and apply each fix as instructed.
+
+You MUST fix ALL ${diffReport.issues.length} issues below — not some, not most, ALL of them:
+
+${formatIssues(diffReport)}
+
+Instructions:
+1. Read ALL ${diffReport.issues.length} issues above before you start writing any code.
+2. For each issue, locate the exact element in the TSX and determine the fix.
+3. Output the complete fixed TSX with every issue resolved.
+4. Do not change anything not mentioned in the issues.`;
+    userContent = userText;
+  } else {
+    console.log("  [Codegen] fetching design context...");
+    const [designContext, screenshotB64] = await Promise.all([
+      fetchFigmaNodeJson(figmaUrl),
+      fetchFigmaScreenshot(figmaUrl),
+    ]);
+    console.log(
+      `  [Codegen] design context fetched (JSON ${Math.round(designContext.jsonString.length / 1024)} KB, screenshot ${Math.round(screenshotB64.length / 1024)} KB)`,
+    );
+    if (debugDir) {
+      await writeDebug(
+        debugDir,
+        "design-context.json",
+        designContext.jsonString,
+      );
     }
-    console.log("  [Codegen] design context fetched");
-    if (debugDir)
-      await writeDebug(debugDir, "design-context.txt", designContext.text);
 
     if (process.env.STOP_AFTER_FIGMA === "1") {
       console.log(
@@ -162,37 +305,51 @@ Return the fixed TSX.`;
       process.exit(0);
     }
 
-    userText = `FIGMA DATA:\n${designContext.text}`;
+    userText = `FIGMA NODE JSON (pruned from /v1/files/:key/nodes):
+\`\`\`json
+${designContext.jsonString}
+\`\`\`
+
+The image attached below is the rendered Figma frame — your visual ground truth. Use the JSON for exact numeric tokens (colors, sizes, spacing, fonts) and the image to confirm layout, shapes, and visual hierarchy.`;
+
+    userContent = [
+      { type: "text", text: userText },
+      {
+        type: "image_url",
+        image_url: {
+          url: `data:image/png;base64,${screenshotB64}`,
+          detail: "high",
+        },
+      },
+    ];
   }
 
   // Debug artifacts
   const iterSuffix = iter != null ? `-${iter}` : "";
   const debugPrefix = isRefinement ? `refine${iterSuffix}` : "codegen";
   if (debugDir)
-    await writeDebug(debugDir, `${debugPrefix}-prompt.txt`, `=== SYSTEM ===\n${systemPrompt}\n\n=== USER ===\n${userText}`);
+    await writeDebug(
+      debugDir,
+      `${debugPrefix}-prompt.txt`,
+      `=== SYSTEM ===\n${systemPrompt}\n\n=== USER ===\n${userText}${isRefinement ? "" : "\n\n[+ Figma screenshot attached as image_url]"}`,
+    );
 
-  // LLM call (with cache)
-  const cached = await readCache(model, systemPrompt, userText);
+  console.log("  [Codegen] calling LLM...");
   let rawTsx: string;
-  if (cached) {
-    console.log(`  [Codegen] cache hit — skipping LLM call`);
-    rawTsx = cached;
-  } else {
-    console.log("  [Codegen] calling LLM…");
-    try {
-      const response = await client.chat.completions.create({
-        model,
-        max_completion_tokens: 4096,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userText },
-        ],
-      });
-      rawTsx = response.choices[0]?.message?.content ?? "";
-    } catch (err) {
-      throw new Error(`Codegen Agent — ${provider} call failed: ${String(err)}`);
-    }
-    await writeCache(model, systemPrompt, userText, rawTsx);
+  try {
+    const response = await client.chat.completions.create({
+      model,
+      max_tokens: 16384,
+      messages: [
+        { role: "system", content: systemPrompt },
+        // OpenAI typings expect a string when content is mixed; cast —
+        // the SDK accepts the multimodal array shape at runtime.
+        { role: "user", content: userContent as unknown as string },
+      ],
+    });
+    rawTsx = response.choices[0]?.message?.content ?? "";
+  } catch (err) {
+    throw new Error(`Codegen Agent — LLM call failed: ${String(err)}`);
   }
 
   if (!rawTsx.trim()) {
@@ -212,15 +369,5 @@ Return the fixed TSX.`;
 
   if (debugDir) await writeDebug(debugDir, `${debugPrefix}-response.tsx`, tsx);
 
-  return {
-    tsx,
-    componentName,
-    dependencies: existingComponent?.dependencies ?? ["react"],
-    tailwindConfigPatch: existingComponent?.tailwindConfigPatch ?? null,
-    ...(isRefinement && diffReport
-      ? {
-          patchSummary: `Fixed ${diffReport.issues.length} issue(s): ${diffReport.issues.map((i) => i.category).join(", ")}`,
-        }
-      : {}),
-  };
+  return { tsx, componentName };
 }

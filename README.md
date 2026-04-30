@@ -1,152 +1,105 @@
-# figgen — Figma-to-code multi-agent system
+# FigGen
 
-A multi-agent pipeline that converts a Figma design URL into a production-quality React + Tailwind component. Built with Mastra AI, GPT-4o vision, and the official Figma MCP server.
-
-## Architecture
-
-Two LLM agents and one render tool operate in a loop:
-
-| Component | File | Role |
-|---|---|---|
-| **Codegen Agent** | `src/agents/codegen.ts` | Generates React TSX from Figma data (generation mode) or applies surgical fixes based on a diff report (refinement mode). Reads long-term design guidelines from memory before each run. |
-| **Judge Agent** | `src/agents/judge.ts` | Compares Figma screenshot vs rendered component using vision LLM. Returns a fidelity score (0–1) and categorized issues. After a successful session, extracts generalizable design guidelines and saves them to long-term memory. |
-| **Render Tool** | `src/agents/render.ts` | Screenshots the generated component in a headless Chromium browser at the exact Figma frame dimensions. Not an LLM agent. |
-
-### Pipeline flow
-
-```
-Read guidelines from memory
-  │
-  ▼
-Codegen (generate) → Write Sandbox → Render → Judge
-                                        ▲        │
-                                        │        ▼
-                                   Write Sandbox ← Codegen (refine) ◄── if fidelity < 95%
-                                                                          (max 3 iterations)
-  │
-  ▼  (on success)
-Judge extracts guidelines → Save to memory
-```
-
-### Long-term memory
-
-Design guidelines accumulate across sessions in `output/memory/guidelines.json`. The Judge agent writes them; the Codegen agent reads them. Over time the system generates better first-pass code without retraining. Capacity is capped at 30 guidelines with hitCount-based eviction.
+Figma-to-code multi-agent pipeline. Given a Figma frame URL, FigGen iterates **codegen → render → judge** until the rendered React/Tailwind component visually matches the Figma design.
 
 ## Prerequisites
 
-- **Node.js 20+**
-- **Figma Personal Access Token** — requires a Dev or Full seat
-  - Figma → Settings → Security → Personal Access Tokens
-- **LLM API key** — at least one of: Requesty (recommended), OpenRouter, OpenAI, or local Ollama
+- **Node.js** ≥ 20 (tested on 22.x)
+- **OpenAI-compatible API key** — used by the codegen and judge agents
+- **Figma personal access token** — used to fetch node JSON and reference screenshots ([how to generate](https://developers.figma.com/docs/rest-api/personal-access-tokens/))
 
 ## Setup
 
 ```bash
-# 1. Install pipeline dependencies
+# 1. Install dependencies for all three packages (root, UI, sandbox)
 npm install
+npm install --prefix ui
+npm install --prefix sandbox
 
-# 2. Install sandbox dependencies
-cd sandbox && npm install && cd ..
-
-# 3. Install UI dependencies
-cd ui && npm install && cd ..
-
-# 4. Install Playwright browser
+# 2. Install Playwright's Chromium (used by the renderer to screenshot the sandbox)
 npx playwright install chromium
 
-# 5. Configure environment variables
+# 3. Configure environment
 cp .env.example .env
-# Edit .env and fill in your keys
 ```
 
-## Running the project
+Then edit `.env`:
 
-### Option A: Web UI (recommended)
+| Variable             | Required? | Notes                                                   |
+| -------------------- | --------- | ------------------------------------------------------- |
+| `OPENAI_API_KEY`     | Required  | Key for the codegen and judge agents.                   |
+| `OPENAI_CHAT_MODEL`  | Required  | Any chat model your endpoint serves (e.g. `gpt-4o`).    |
+| `FIGMA_ACCESS_TOKEN` | Required  | Personal access token used to read node JSON + assets.  |
+| `OPENAI_BASE_URL`    | Optional  | Set only if you're not using `api.openai.com`.          |
+
+## Run
+
+### Option A — UI (recommended for interactive use)
 
 ```bash
 npm run dev
 ```
 
-This starts both the API server (port 4111) and the React UI concurrently. Open the URL printed in the terminal, paste a Figma frame URL, and click **Run →**.
+This starts the API server (`localhost:4111`) and the React UI (`localhost:5174`) concurrently. Open `http://localhost:5174`, paste a Figma frame URL, and click **Run**. Progress streams live: Figma screenshot → codegen → render → judge → refinement iterations.
 
-### Option B: CLI
-
-```bash
-npm run pipeline "https://www.figma.com/design/abc123/MyDesign?node-id=1-2"
-```
-
-CLI flags:
-- `--max-iter N` — max refinement iterations (default: 3, use 0 to skip the render/judge loop)
-- `--skip-codegen` — skip generation and use the existing `sandbox/src/GeneratedComponent.tsx`
-- `--stop-after-figma` — fetch Figma data and save to debug dir, then exit
-
-### Option C: Individual services
+### Option B — CLI (single run, useful for scripting)
 
 ```bash
-npm run server                       # API server only (port 4111)
-npm run ui                           # React UI only
-cd sandbox && npm run dev            # Sandbox preview (port 5173)
+npm run pipeline -- "<figmaUrl>" [--max-iter N] [--use-memory]
 ```
 
-## Available scripts
+Examples:
 
-| Script | Description |
-|--------|-------------|
-| `npm run dev` | Start server + UI concurrently |
-| `npm run server` | HTTP server with SSE endpoint (`/api/run`) |
-| `npm run ui` | React web UI |
-| `npm run pipeline "URL"` | CLI pipeline entry point |
-| `npm run typecheck` | TypeScript type checking |
-| `npm run test:diff` | Test the judge agent with saved debug artifacts |
+```bash
+# Default: 3 iterations (1 initial codegen + 2 refinement passes)
+npm run pipeline -- "https://www.figma.com/design/abc123/My-File?node-id=1-2"
 
-## Environment variables
+# Single-shot generation, no refinement
+npm run pipeline -- "https://www.figma.com/design/abc123/My-File?node-id=1-2" --max-iter 1
 
-Set in `.env` (see `.env.example`):
+# Enable long-term memory: read prior design guidelines and append new ones
+npm run pipeline -- "<url>" --use-memory
+```
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `REQUESTY_API_KEY` | One LLM key required | Requesty API key (recommended) |
-| `REQUESTY_MODEL` | No | Model override (default: `openai-responses/gpt-5.4-nano`) |
-| `REQUESTY_DIFF_MODEL` | No | Separate model for Judge agent (default: `openai/gpt-4o`) |
-| `OPENROUTER_API_KEY` | Alt | OpenRouter API key |
-| `OPENAI_API_KEY` | Alt | OpenAI API key |
-| `OLLAMA_MODEL` | Alt | Ollama model name for local inference |
-| `FIGMA_ACCESS_TOKEN` | Yes | Figma personal access token |
-| `SERVER_PORT` | No | Server port (default: 4111) |
-| `SANDBOX_URL` | No | Sandbox URL (default: `http://localhost:5173`) |
+The generated component is written to [sandbox/src/GeneratedComponent.tsx](sandbox/src/GeneratedComponent.tsx). Per-iteration debug artifacts (rendered screenshots, diff reports, prompts) are saved under `output/<timestamp>/`.
 
-## Project structure
+### Option C — Evaluation harness
+
+```bash
+npm run eval
+```
+
+Runs the pipeline across a fixed list of Figma URLs and reports MAE (pixel-level) and VES (DINOv2 cosine similarity) scores. You can customize the evaluation corpus by editing the `FIGMA_URLS` array in [evaluate/run-eval.ts](evaluate/run-eval.ts).
+
+## Project layout
 
 ```
-figgen/
-├── src/
-│   ├── agents/
-│   │   ├── codegen.ts              # Codegen Agent — generation + refinement
-│   │   ├── judge.ts                # Judge Agent — fidelity scoring + guideline extraction
-│   │   └── render.ts               # Render tool — Playwright screenshots
-│   ├── types/
-│   │   └── index.ts                # Zod schemas (GeneratedComponent, DiffReport, Guideline)
-│   ├── utils/
-│   │   ├── figma.ts                # Figma MCP + REST API integration with caching
-│   │   ├── llm-cache.ts            # File-based LLM response cache
-│   │   ├── memory.ts               # Long-term guideline memory (read/write/evict)
-│   │   └── debug.ts                # Debug run directory & artifact management
-│   ├── mastra/
-│   │   ├── agents.ts               # Mastra Agent instances
-│   │   ├── tools.ts                # Mastra Tool wrappers
-│   │   ├── workflow.ts             # Mastra workflow (codegen → write sandbox)
-│   │   └── index.ts                # Mastra instance export
-│   ├── pipeline.ts                 # CLI entry point
-│   ├── pipeline-runner.ts          # Event-emitting pipeline (used by server)
-│   └── server.ts                   # HTTP server with SSE streaming
-├── sandbox/                        # Isolated Vite React app for component preview
-├── ui/                             # React web UI for pipeline control
-├── scripts/
-│   └── test-diff.ts                # Standalone judge prompt testing
-├── output/                         # Generated at runtime
-│   ├── debug/                      # Timestamped run directories with artifacts
-│   ├── llm-cache/                  # Cached LLM responses
-│   ├── figma-cache/                # Cached Figma API data
-│   └── memory/                     # Long-term design guidelines
-└── .env.example
+src/
+  pipeline.ts          CLI entry point
+  pipeline-runner.ts   Orchestrates the codegen ↔ judge loop
+  server.ts            HTTP/SSE wrapper for the UI
+  agents/
+    codegen.ts         Generates/refines TSX from Figma JSON + screenshot
+    judge.ts           Compares rendered screenshot against Figma, emits a diff report
+  utils/
+    figma.ts           Figma REST client (node JSON, screenshots, imageRef assets)
+    render.ts          Boots Vite sandbox, screenshots #generated-component via Playwright
+    memory.ts          Long-term design-guideline storage
+ui/                    React/Vite frontend (port 5174)
+sandbox/               Vite app that hosts the generated component (port 5173)
+evaluate/              MAE + VES evaluation harness
+```
+
+## Ports
+
+| Service       | Default port | Override                |
+| ------------- | ------------ | ----------------------- |
+| API server    | 4111         | `SERVER_PORT` env var   |
+| UI dev server | 5174         | `ui/vite.config.ts`     |
+| Sandbox       | 5173         | `SANDBOX_URL` env var   |
+
+## Type-check
+
+```bash
+npm run typecheck
 ```

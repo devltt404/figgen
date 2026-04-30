@@ -1,8 +1,6 @@
 /**
  * figgen API server
  * Exposes the pipeline as an SSE endpoint so the UI can stream progress.
- *
- * POST /api/run   { figmaUrl, maxIter?, skipCodegen? }  → text/event-stream
  */
 
 import "dotenv/config";
@@ -29,7 +27,8 @@ function readBody(req: http.IncomingMessage): Promise<string> {
 const server = http.createServer(async (req, res) => {
   cors(res);
 
-  // preflight
+  // CORS preflight — the UI dev server lives on a different port (5174)
+  // than the API (4111), so browsers send OPTIONS before the real POST.
   if (req.method === "OPTIONS") {
     res.writeHead(204);
     res.end();
@@ -37,7 +36,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === "POST" && req.url === "/api/run") {
-    let body: { figmaUrl?: string; maxIter?: number; skipCodegen?: boolean };
+    let body: { figmaUrl?: string; maxIter?: number };
     try {
       body = JSON.parse(await readBody(req));
     } catch {
@@ -46,7 +45,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    const { figmaUrl, maxIter, skipCodegen } = body;
+    const { figmaUrl, maxIter } = body;
     if (!figmaUrl) {
       res.writeHead(400, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "figmaUrl is required" }));
@@ -64,7 +63,7 @@ const server = http.createServer(async (req, res) => {
     };
 
     try {
-      await runPipeline(figmaUrl, { maxIter, skipCodegen }, emit);
+      await runPipeline(figmaUrl, { maxIter }, emit);
     } catch (err) {
       emit({ type: "error", message: String(err) });
     }

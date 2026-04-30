@@ -1,3 +1,13 @@
+/**
+ * Per-run debug artifacts.
+ *
+ * Each call to `runPipeline` creates a timestamped directory under
+ * `output/debug/<YYYY-MM-DD_HH-MM-SS>/` to which the agents write their
+ * prompts/responses (codegen JSON + TSX, judge prompt + report). After the
+ * run ends, `saveDebugRun` flushes the screenshots so a directory listing
+ * tells the full story without needing to replay the run.
+ */
+
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,6 +22,7 @@ export interface IterationArtifacts {
   diff?: DiffReport;
 }
 
+/** Create a fresh `output/debug/<timestamp>/` directory for this run. */
 export async function createRunDir(): Promise<string> {
   const runId = new Date()
     .toISOString()
@@ -23,14 +34,13 @@ export async function createRunDir(): Promise<string> {
   return runDir;
 }
 
+/** Persist the design screenshot + every iteration's render to the run dir. */
 export async function saveDebugRun(
   runDir: string,
   figmaScreenshot: string,
   iterations: IterationArtifacts[],
 ): Promise<void> {
-
   if (figmaScreenshot) await writePng(runDir, "figma-design.png", figmaScreenshot);
-
   for (const iter of iterations) {
     const label = iter.iteration === 0 ? "render-0-initial" : `render-${iter.iteration}-refined`;
     await writePng(runDir, `${label}.png`, iter.screenshot);
@@ -38,6 +48,5 @@ export async function saveDebugRun(
 }
 
 async function writePng(dir: string, filename: string, base64: string): Promise<void> {
-  const buffer = Buffer.from(base64, "base64");
-  await fs.writeFile(path.join(dir, filename), buffer);
+  await fs.writeFile(path.join(dir, filename), Buffer.from(base64, "base64"));
 }
