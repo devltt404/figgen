@@ -1,4 +1,5 @@
 // Figma REST API client.
+// Assisted with Claude Code.
 
 import "dotenv/config";
 import fs from "node:fs/promises";
