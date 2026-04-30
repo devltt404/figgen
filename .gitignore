@@ -2,3 +2,5 @@
 node_modules
 output
 .claude/**
+.ignore
+sandbox/public/figma-assets/

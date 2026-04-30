@@ -1,23 +1,40 @@
 /**
- * Judge Agent — src/agents/judge.ts
+ * Judge Agent — visual comparison + long-term memory writer.
  *
- * Renamed from the Diff Agent. Two responsibilities:
- * 1. runJudge  — visual comparison of Figma screenshot vs rendered screenshot
- * 2. extractGuidelines — summarize session critiques into reusable design guidelines
+ * runJudge:           compares Figma design vs. rendered screenshot, returns a DiffReport.
+ * extractGuidelines:  distils a session's critiques into reusable design guidelines.
  *
- * The Judge agent is the sole manager of long-term memory.
+ * The Judge is the only writer of long-term memory (output/memory/guidelines.md).
  */
 
 import "dotenv/config";
+import { jsonrepair } from "jsonrepair";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DiffReport } from "../types/index.js";
 import { fetchFigmaScreenshot } from "../utils/figma.js";
-import { readCache, writeCache } from "../utils/llm-cache.js";
-import { createLLMClient, type LLMClient } from "../utils/llm-client.js";
+import { createLLMClient } from "../utils/llm-client.js";
 
-function createClient(): LLMClient {
-  return createLLMClient(process.env.REQUESTY_DIFF_MODEL);
+/**
+ * Try strict JSON.parse first; if that throws (LLM typos like `"key: "value"`,
+ * trailing commas, single quotes, unquoted keys), fall back to jsonrepair.
+ * Logs a warning when repair was needed so we can spot quality issues.
+ */
+function parseLooseJson<T>(slice: string, context: string): T {
+  try {
+    return JSON.parse(slice) as T;
+  } catch (strictErr) {
+    try {
+      const repaired = jsonrepair(slice);
+      const result = JSON.parse(repaired) as T;
+      console.warn(
+        `  [Judge] ${context}: strict JSON parse failed, used jsonrepair fallback`,
+      );
+      return result;
+    } catch {
+      throw strictErr;
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -92,58 +109,56 @@ export async function runJudge(
   debugDir?: string,
   iter = 0,
 ): Promise<DiffReport> {
-  const { client, model, provider } = createClient();
-  console.log(`  [Judge] backend: ${provider} (${model})`);
+  const { client, model } = createLLMClient();
+  console.log(`  [Judge] model: ${model}`);
 
-  console.log("  [Judge] fetching Figma screenshot…");
+  console.log("  [Judge] fetching Figma screenshot...");
   const figmaScreenshot = await fetchFigmaScreenshot(figmaUrl);
   console.log(
     `  [Judge] Figma screenshot received (${Math.round(figmaScreenshot.length / 1024)} KB)`,
   );
 
-  const cacheUserKey = `figma:${figmaScreenshot}|rendered:${renderedScreenshot}`;
-  const cached = await readCache(model, JUDGE_SYSTEM_PROMPT, cacheUserKey);
+  console.log("  [Judge] calling LLM for visual comparison...");
   let raw: string;
-  if (cached) {
-    console.log("  [Judge] cache hit — skipping LLM call");
-    raw = cached;
-  } else {
-    console.log("  [Judge] calling LLM for visual comparison…");
-    try {
-      const response = await client.chat.completions.create({
-        model,
-        max_completion_tokens: 4096,
-        temperature: 0,
-        messages: [
-          { role: "system", content: JUDGE_SYSTEM_PROMPT },
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: "IMAGE 1 below is the ORIGINAL FIGMA DESIGN (the ground truth).",
+  try {
+    const response = await client.chat.completions.create({
+      model,
+      max_tokens: 4096,
+      temperature: 0,
+      messages: [
+        { role: "system", content: JUDGE_SYSTEM_PROMPT },
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: "IMAGE 1 below is the ORIGINAL FIGMA DESIGN (the ground truth).",
+            },
+            {
+              type: "image_url",
+              image_url: {
+                url: `data:image/png;base64,${figmaScreenshot}`,
+                detail: "high",
               },
-              {
-                type: "image_url",
-                image_url: { url: `data:image/png;base64,${figmaScreenshot}`, detail: "high" },
+            },
+            {
+              type: "text",
+              text: "IMAGE 2 below is the RENDERED REACT COMPONENT (the implementation to critique). Compare it against the Figma design above and return the JSON diff report.",
+            },
+            {
+              type: "image_url",
+              image_url: {
+                url: `data:image/png;base64,${renderedScreenshot}`,
+                detail: "high",
               },
-              {
-                type: "text",
-                text: "IMAGE 2 below is the RENDERED REACT COMPONENT (the implementation to critique). Compare it against the Figma design above and return the JSON diff report.",
-              },
-              {
-                type: "image_url",
-                image_url: { url: `data:image/png;base64,${renderedScreenshot}`, detail: "high" },
-              },
-            ],
-          },
-        ],
-      });
-      raw = response.choices[0]?.message?.content ?? "";
-    } catch (err) {
-      throw new Error(`Judge Agent — ${provider} call failed: ${String(err)}`);
-    }
-    await writeCache(model, JUDGE_SYSTEM_PROMPT, cacheUserKey, raw);
+            },
+          ],
+        },
+      ],
+    });
+    raw = response.choices[0]?.message?.content ?? "";
+  } catch (err) {
+    throw new Error(`Judge Agent — LLM call failed: ${String(err)}`);
   }
 
   if (!raw.trim()) {
@@ -153,14 +168,21 @@ export async function runJudge(
   const start = raw.indexOf("{");
   const end = raw.lastIndexOf("}");
   if (start === -1 || end === -1) {
-    throw new Error(`Judge Agent — no JSON object found in LLM response:\n${raw}`);
+    throw new Error(
+      `Judge Agent — no JSON object found in LLM response:\n${raw}`,
+    );
   }
 
   let report: DiffReport;
   try {
-    report = JSON.parse(raw.slice(start, end + 1)) as DiffReport;
+    report = parseLooseJson<DiffReport>(
+      raw.slice(start, end + 1),
+      "diff report",
+    );
   } catch {
-    throw new Error(`Judge Agent — failed to parse LLM response as JSON:\n${raw}`);
+    throw new Error(
+      `Judge Agent — failed to parse LLM response as JSON:\n${raw}`,
+    );
   }
 
   console.log(`  [Judge] ${report.issues.length} issue(s) found`);
@@ -204,8 +226,10 @@ export async function extractGuidelines(
 ): Promise<string[]> {
   if (sessionDiffs.length === 0) return [];
 
-  const { client, model, provider } = createClient();
-  console.log(`  [Judge] extracting guidelines from ${sessionDiffs.length} diff report(s)… (${provider})`);
+  const { client, model } = createLLMClient();
+  console.log(
+    `  [Judge] extracting guidelines from ${sessionDiffs.length} diff report(s)... (${model})`,
+  );
 
   let userText = sessionDiffs
     .map(
@@ -218,29 +242,22 @@ export async function extractGuidelines(
     userText += `\n\nEXISTING GUIDELINES (do NOT repeat or rephrase these — only add genuinely new insights):\n${existingGuidelines.map((g) => `- ${g}`).join("\n")}`;
   }
 
-  const cached = await readCache(model, GUIDELINES_SYSTEM_PROMPT, userText);
   let raw: string;
-  if (cached) {
-    console.log("  [Judge] guidelines cache hit");
-    raw = cached;
-  } else {
-    try {
-      const response = await client.chat.completions.create({
-        model,
-        max_completion_tokens: 1024,
-        temperature: 0,
-        messages: [
-          { role: "system", content: GUIDELINES_SYSTEM_PROMPT },
-          { role: "user", content: userText },
-        ],
-      });
-      raw = response.choices[0]?.message?.content ?? "";
-    } catch (err) {
-      const msg = `[Judge] guideline extraction failed: ${String(err)}`;
-      console.warn(`  ${msg}`);
-      throw new Error(msg);
-    }
-    await writeCache(model, GUIDELINES_SYSTEM_PROMPT, userText, raw);
+  try {
+    const response = await client.chat.completions.create({
+      model,
+      max_tokens: 1024,
+      temperature: 0,
+      messages: [
+        { role: "system", content: GUIDELINES_SYSTEM_PROMPT },
+        { role: "user", content: userText },
+      ],
+    });
+    raw = response.choices[0]?.message?.content ?? "";
+  } catch (err) {
+    const msg = `[Judge] guideline extraction failed: ${String(err)}`;
+    console.warn(`  ${msg}`);
+    throw new Error(msg);
   }
 
   if (debugDir) {
@@ -256,7 +273,10 @@ export async function extractGuidelines(
   if (arrStart === -1 || arrEnd === -1) return [];
 
   try {
-    const parsed = JSON.parse(raw.slice(arrStart, arrEnd + 1));
+    const parsed = parseLooseJson<unknown>(
+      raw.slice(arrStart, arrEnd + 1),
+      "guidelines",
+    );
     if (!Array.isArray(parsed)) return [];
     return parsed.filter((item): item is string => typeof item === "string");
   } catch {

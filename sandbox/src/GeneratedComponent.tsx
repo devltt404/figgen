@@ -1,70 +1,85 @@
-import React from "react";
+import React from 'react';
 
 const ProfileCard: React.FC = () => {
   return (
-    <div className="bg-white rounded-[20px] p-[28px] w-[380px] flex flex-col gap-[20px]">
+    <div className="flex flex-col bg-[#ffffff] rounded-[20px] p-[28px] gap-[20px] w-[380px]">
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');`}</style>
+
+      {/* Header Row */}
       <div className="flex items-center gap-[16px]">
-        <div className="bg-[#6366F0] rounded-full w-[72px] h-[72px] flex items-center justify-center">
-          <span className="text-white text-[24px] font-[600]">AP</span>
+        {/* Avatar */}
+        <div className="flex items-center justify-center w-[72px] h-[72px] bg-[#6367f1] rounded-full">
+          <span className="font-['Inter'] font-semibold text-[24px] leading-[29px] text-[#ffffff]">AP</span>
         </div>
+
+        {/* Name Section */}
         <div className="flex flex-col gap-[4px]">
-          <span className="text-[#11151F] text-[20px] font-[600]">
-            Alex Parker
-          </span>
-          <span className="text-[#6B7180] text-[14px]">
-            Senior Product Designer
-          </span>
-          <div className="flex items-center gap-[5px] bg-[#E6F2FF] rounded-[20px] px-[10px] py-[4px]">
-            <div className="bg-[#6366F0] rounded-full w-[6px] h-[6px]" />
-            <span className="text-[#434FBF] text-[12px] font-[500]">
-              Hexagon Design Co.
-            </span>
+          <p className="font-['Inter'] font-semibold text-[20px] leading-[24px] text-[#111827]">Alex Parker</p>
+          <p className="font-['Inter'] font-normal text-[14px] leading-[17px] text-[#6B7280]">Senior Product Designer</p>
+          <div className="flex items-center gap-[5px] bg-[#edf0ff] px-[10px] py-[4px] rounded-[20px]">
+            <div className="w-[6px] h-[6px] bg-[#6367f1] rounded-full"></div>
+            <p className="font-['Inter'] font-medium text-[12px] leading-[15px] text-[#434fcf]">Hexagon Design Co.</p>
           </div>
         </div>
       </div>
-      <hr className="border-t bg-[#E5E8EB]" />
-      <div className="flex items-center justify-between bg-[#F5F7FF] rounded-[12px] px-[12px] py-[16px]">
+
+      {/* Divider */}
+      <div className="w-full h-[1px] bg-[#e5e8eb]"></div>
+
+      {/* Stats */}
+      <div className="flex items-center justify-between bg-[#f5f7ff] rounded-[12px] px-[12px] py-[16px]">
+        {/* Projects */}
         <div className="flex flex-col items-center gap-[2px]">
-          <span className="text-[#11151F] text-[20px] font-[700]">248</span>
-          <span className="text-[#9CA2AF] text-[12px]">Projects</span>
+          <p className="font-['Inter'] font-bold text-[20px] leading-[24px] text-[#111827]">248</p>
+          <p className="font-['Inter'] font-normal text-[12px] leading-[15px] text-[#9CA3AF]">Projects</p>
         </div>
-        <div className="w-[1px] h-[36px] bg-[#E5E8EB]" />
+        {/* Divider */}
+        <div className="w-[1px] h-[36px] bg-[#e5e8eb]"></div>
+        {/* Followers */}
         <div className="flex flex-col items-center gap-[2px]">
-          <span className="text-[#11151F] text-[20px] font-[700]">14.2K</span>
-          <span className="text-[#9CA2AF] text-[12px]">Followers</span>
+          <p className="font-['Inter'] font-bold text-[20px] leading-[24px] text-[#111827]">14.2K</p>
+          <p className="font-['Inter'] font-normal text-[12px] leading-[15px] text-[#9CA3AF]">Followers</p>
         </div>
-        <div className="w-[1px] h-[36px] bg-[#E5E8EB]" />
+        {/* Divider */}
+        <div className="w-[1px] h-[36px] bg-[#e5e8eb]"></div>
+        {/* Following */}
         <div className="flex flex-col items-center gap-[2px]">
-          <span className="text-[#11151F] text-[20px] font-[700]">891</span>
-          <span className="text-[#9CA2AF] text-[12px]">Following</span>
+          <p className="font-['Inter'] font-bold text-[20px] leading-[24px] text-[#111827]">891</p>
+          <p className="font-['Inter'] font-normal text-[12px] leading-[15px] text-[#9CA3AF]">Following</p>
         </div>
       </div>
-      <p className="text-[#374059] text-[14px] leading-[22px] mt-[16px]">
-        Passionate about crafting intuitive digital experiences. Specializing
-        in design systems, user research, and prototyping for enterprise
-        products.
+
+      {/* Bio */}
+      <p className="font-['Inter'] font-normal text-[14px] leading-[22px] text-[#374151]">
+        Passionate about crafting intuitive digital experiences. Specializing in design systems, user research, and
+        prototyping for enterprise products.
       </p>
-      <div className="flex items-center gap-[8px] mt-[12px]">
-        <div className="flex items-center bg-[#E6F2FF] rounded-[20px] px-[12px] py-[5px]">
-          <span className="text-[#434FBF] text-[12px] font-[500]">UX Design</span>
+
+      {/* Tags */}
+      <div className="flex gap-[8px]">
+        {/* UX Design */}
+        <div className="flex items-center bg-[#edf0ff] px-[12px] py-[5px] rounded-full">
+          <p className="font-['Inter'] font-medium text-[12px] leading-[15px] text-[#434fcf]">UX Design</p>
         </div>
-        <div className="flex items-center bg-[#F0FDF3] rounded-[20px] px-[12px] py-[5px]">
-          <span className="text-[#14CD3D] text-[12px] font-[500]">
-            Prototyping
-          </span>
+        {/* Prototyping */}
+        <div className="flex items-center bg-[#f0fef4] px-[12px] py-[5px] rounded-full">
+          <p className="font-['Inter'] font-medium text-[12px] leading-[15px] text-[#14d83e]">Prototyping</p>
         </div>
-        <div className="flex items-center bg-[#FFF6EC] rounded-[20px] px-[12px] py-[5px]">
-          <span className="text-[#C2410C] text-[12px] font-[500]">
-            Figma Expert
-          </span>
+        {/* Figma Expert */}
+        <div className="flex items-center bg-[#fffaed] px-[12px] py-[5px] rounded-full">
+          <p className="font-['Inter'] font-medium text-[12px] leading-[15px] text-[#c2400c]">Figma Expert</p>
         </div>
       </div>
-      <div className="flex justify-between gap-[12px] mt-[16px]">
-        <div className="flex items-center bg-[#4F2FE9] rounded-[10px] w-[166px] h-[44px] justify-center">
-          <span className="text-white text-[15px] font-[600]">Follow</span>
+
+      {/* Actions */}
+      <div className="flex items-center justify-between">
+        {/* Follow Button */}
+        <div className="flex items-center justify-center bg-[#4f46e5] w-[166px] h-[44px] rounded-[10px]">
+          <span className="font-['Inter'] font-semibold text-[15px] leading-[18px] text-[#ffffff]">Follow</span>
         </div>
-        <div className="flex items-center bg-white border-[1.5px] border-[#D1D5DB] rounded-[10px] w-[166px] h-[44px] justify-center">
-          <span className="text-[#374059] text-[15px] font-[600]">Message</span>
+        {/* Message Button */}
+        <div className="flex items-center justify-center border border-[#d2d6dc] bg-[#ffffff] w-[166px] h-[44px] rounded-[10px]">
+          <span className="font-['Inter'] font-semibold text-[15px] leading-[18px] text-[#374151]">Message</span>
         </div>
       </div>
     </div>

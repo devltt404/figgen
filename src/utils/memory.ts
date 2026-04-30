@@ -1,9 +1,8 @@
 /**
  * Long-term memory — plain-text design guidelines accumulated across sessions.
  *
- * Storage: output/memory/guidelines.md
- * Format: one bullet point per line ("- guideline text")
- * Capacity: 30 lines max, oldest removed first when full.
+ * Storage: output/memory/guidelines.md (one bullet per line)
+ * Capacity: MAX_GUIDELINES; oldest entries are evicted FIFO when full.
  */
 
 import fs from "node:fs/promises";
@@ -17,9 +16,6 @@ const MEMORY_DIR = path.resolve(
 const GUIDELINES_PATH = path.join(MEMORY_DIR, "guidelines.md");
 const MAX_GUIDELINES = 10;
 
-/**
- * Read all guideline texts from the plain-text file.
- */
 export async function readGuidelines(): Promise<string[]> {
   try {
     const raw = await fs.readFile(GUIDELINES_PATH, "utf-8");
@@ -33,15 +29,9 @@ export async function readGuidelines(): Promise<string[]> {
 }
 
 /**
- * Clear all guidelines from memory.
- */
-export async function clearMemory(): Promise<void> {
-  await fs.mkdir(MEMORY_DIR, { recursive: true });
-  await fs.writeFile(GUIDELINES_PATH, "", "utf-8");
-}
-
-/**
- * Append new guidelines to memory. Simple substring dedup, cap at MAX_GUIDELINES.
+ * Append new guidelines, deduping by substring overlap (case-insensitive).
+ * Returns the number of newly-added entries. Caps total at MAX_GUIDELINES,
+ * evicting oldest first.
  */
 export async function writeGuidelines(
   newGuidelines: string[],
@@ -53,7 +43,6 @@ export async function writeGuidelines(
     const trimmed = text.trim();
     if (!trimmed) continue;
 
-    // Simple dedup: skip if existing guideline contains this or vice versa
     const lower = trimmed.toLowerCase();
     const isDupe = existing.some((e) => {
       const el = e.toLowerCase();
@@ -65,10 +54,7 @@ export async function writeGuidelines(
     added++;
   }
 
-  // Cap at MAX_GUIDELINES — remove oldest (top of file) first
-  while (existing.length > MAX_GUIDELINES) {
-    existing.shift();
-  }
+  while (existing.length > MAX_GUIDELINES) existing.shift();
 
   if (added > 0) {
     await fs.mkdir(MEMORY_DIR, { recursive: true });

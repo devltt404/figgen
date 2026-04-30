@@ -1,22 +1,17 @@
 /**
  * figgen API server
  * Exposes the pipeline as an SSE endpoint so the UI can stream progress.
- *
- * POST /api/run   { figmaUrl, maxIter?, skipCodegen? }  → text/event-stream
  */
 
 import "dotenv/config";
 import http from "node:http";
 import { runPipeline, type PipelineEvent } from "./pipeline-runner.js";
-import { clearMemory } from "./utils/memory.js";
-import { clearLLMCache } from "./utils/llm-cache.js";
-import { clearFigmaCache } from "./utils/figma.js";
 
 const PORT = parseInt(process.env.SERVER_PORT ?? "4111", 10);
 
 function cors(res: http.ServerResponse) {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 }
 
@@ -32,7 +27,8 @@ function readBody(req: http.IncomingMessage): Promise<string> {
 const server = http.createServer(async (req, res) => {
   cors(res);
 
-  // preflight
+  // CORS preflight — the UI dev server lives on a different port (5174)
+  // than the API (4111), so browsers send OPTIONS before the real POST.
   if (req.method === "OPTIONS") {
     res.writeHead(204);
     res.end();
@@ -40,7 +36,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === "POST" && req.url === "/api/run") {
-    let body: { figmaUrl?: string; maxIter?: number; skipCodegen?: boolean };
+    let body: { figmaUrl?: string; maxIter?: number };
     try {
       body = JSON.parse(await readBody(req));
     } catch {
@@ -49,7 +45,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    const { figmaUrl, maxIter, skipCodegen } = body;
+    const { figmaUrl, maxIter } = body;
     if (!figmaUrl) {
       res.writeHead(400, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "figmaUrl is required" }));
@@ -67,48 +63,12 @@ const server = http.createServer(async (req, res) => {
     };
 
     try {
-      await runPipeline(figmaUrl, { maxIter, skipCodegen }, emit);
+      await runPipeline(figmaUrl, { maxIter }, emit);
     } catch (err) {
       emit({ type: "error", message: String(err) });
     }
 
     res.end();
-    return;
-  }
-
-  if (req.method === "DELETE" && req.url === "/api/cache") {
-    try {
-      const llmCount = await clearLLMCache();
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ cleared: { llm: llmCount } }));
-    } catch (err) {
-      res.writeHead(500, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: String(err) }));
-    }
-    return;
-  }
-
-  if (req.method === "DELETE" && req.url === "/api/figma-cache") {
-    try {
-      const figmaCount = await clearFigmaCache();
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ cleared: { figma: figmaCount } }));
-    } catch (err) {
-      res.writeHead(500, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: String(err) }));
-    }
-    return;
-  }
-
-  if (req.method === "DELETE" && req.url === "/api/memory") {
-    try {
-      await clearMemory();
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ ok: true }));
-    } catch (err) {
-      res.writeHead(500, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: String(err) }));
-    }
     return;
   }
 

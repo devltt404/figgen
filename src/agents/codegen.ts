@@ -1,20 +1,22 @@
 /**
- * Codegen Agent — src/agents/codegen.ts
+ * Codegen Agent — generates or refines a React TSX component.
  *
- * Unified agent that handles both initial code generation and refinement.
- * - Generation mode: receives Figma data, produces React TSX
- * - Refinement mode: receives existing TSX + DiffReport, applies surgical fixes
+ * Generation mode: receives a Figma URL → fetches design JSON + screenshot →
+ *   produces TSX (multimodal LLM call).
+ * Refinement mode: receives existing TSX + a DiffReport → applies surgical fixes.
  *
- * Both modes optionally incorporate long-term design guidelines from memory.
+ * Both modes optionally consume design guidelines from long-term memory.
  */
 
 import "dotenv/config";
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { GeneratedComponent, DiffReport } from "../types/index.js";
-import { fetchFigmaNodeJson, fetchFigmaScreenshot, parseFigmaUrl } from "../utils/figma.js";
-import { readCache, writeCache } from "../utils/llm-cache.js";
+import type { DiffReport, GeneratedComponent } from "../types/index.js";
+import {
+  fetchFigmaNodeJson,
+  fetchFigmaScreenshot,
+  parseFigmaUrl,
+} from "../utils/figma.js";
 import { createLLMClient } from "../utils/llm-client.js";
 
 function stripFences(raw: string): string {
@@ -64,6 +66,7 @@ You receive two inputs:
    - Corners in \`cornerRadius\` (uniform) or \`rectangleCornerRadii\` ([tl, tr, br, bl]).
    - Shadows/effects in \`effects\` (type \`DROP_SHADOW\`/\`INNER_SHADOW\` with \`offset\`, \`radius\`, \`color\`).
    - Text content in \`characters\`.
+   - Image assets: a fill with \`type:"IMAGE"\` and an \`imageRef\` whose value starts with \`/figma-assets/\` is a real PNG already saved on disk. Render it as \`<img src="<imageRef>" alt="" />\` or as a CSS background via Tailwind arbitrary value: \`bg-[url('<imageRef>')] bg-cover bg-center\`. Honor the \`scaleMode\` field: \`FILL\`→\`bg-cover\`/\`object-cover\`, \`FIT\`→\`bg-contain\`/\`object-contain\`, \`TILE\`→\`bg-repeat\`, \`STRETCH\`→\`object-fill\`. If a fill has \`resolved:false\`, the asset wasn't available — fall back to a neutral placeholder (e.g. \`bg-neutral-200\`).
 2. **PNG screenshot** — the rendered Figma frame, attached as an image. Treat it as the visual ground truth. Use it to disambiguate when the JSON is ambiguous (e.g. icon shapes, exact appearance of a stroke).
 
 Cross-reference both: the JSON gives you exact numeric tokens; the image confirms layout, shape, and visual hierarchy.
@@ -105,9 +108,77 @@ When you receive existing TSX code along with a diff report of visual issues, ap
 - Match flex directions and alignment exactly. If the design has a vertical stack, use flex-col. If items are center-aligned, use items-center. Pay attention to justify-content vs align-items.
 - Pay attention to the root element's layout: flex vs block, row vs column, and whether the content is centered or edge-aligned.
 - Use semantic HTML: nav, header, main, section, article, footer, button, a, h1-h6, p, ul, li where appropriate.
-- For font family: use the exact font name from the token.
 - The component must render at its natural/intrinsic size matching the design frame. Do NOT add min-h-screen or w-full to the root element.
 - No interactivity or state unless explicitly visible in the design.
+
+## Fonts
+
+When TEXT nodes have \`style.fontFamily\`, you MUST load the font and apply it. Follow this exact procedure:
+
+### Step 1 — split the Figma fontFamily into a base family and a weight
+
+Figma stores the variant in the family name itself (e.g. \`"Gilroy-SemiBold"\`, \`"Inter-Bold"\`). The numeric \`fontWeight\` field is unreliable for variant fonts — derive weight from the suffix:
+
+| Suffix | Weight | Tailwind |
+|---|---|---|
+| -Thin / -Hairline | 100 | font-thin |
+| -ExtraLight / -UltraLight | 200 | font-extralight |
+| -Light | 300 | font-light |
+| -Regular / -Normal / (no suffix) | 400 | font-normal |
+| -Medium | 500 | font-medium |
+| -SemiBold / -DemiBold | 600 | font-semibold |
+| -Bold | 700 | font-bold |
+| -ExtraBold / -UltraBold | 800 | font-extrabold |
+| -Black / -Heavy | 900 | font-black |
+
+Add \`-italic\` to the weight class if the suffix includes \`Italic\` / \`Oblique\` (\`italic\` Tailwind utility).
+
+So \`"Gilroy-SemiBold"\` → base \`"Gilroy"\`, weight 600 → \`font-semibold\`.
+
+### Step 2 — emit ONE inline \`<style>\` tag at the very top of the root JSX
+
+Combine every unique base family into a single Google Fonts \`@import url(...)\` request, asking for all common weights so the browser has every variant available. Place this as the FIRST child of the root element:
+
+\`\`\`tsx
+<style>{\`@import url('https://fonts.googleapis.com/css2?family=Gilroy:wght@300;400;500;600;700;800;900&family=Inter:wght@300;400;500;600;700;800;900&display=swap');\`}</style>
+\`\`\`
+
+Rules:
+- Replace spaces in family names with \`+\` (e.g. \`"Open Sans"\` → \`Open+Sans\`).
+- Use \`&family=...\` to chain multiple families in ONE URL — never emit multiple \`<style>\` tags or multiple \`<link>\` elements.
+- Always include \`&display=swap\` so text stays visible while the font loads.
+- The inline string MUST use template-literal backticks so the URL's single quotes inside don't break JSX, and you DO NOT need \`dangerouslySetInnerHTML\`.
+
+### Step 3 — apply on every text element using Tailwind arbitrary values
+
+For each text element, emit BOTH the base family AND the derived weight:
+
+\`\`\`tsx
+<p className="font-['Gilroy'] font-semibold text-[30px] leading-[39px] ...">What is the name...</p>
+\`\`\`
+
+Rules for the family arbitrary value:
+- Use SINGLE quotes inside the brackets: \`font-['Gilroy']\`.
+- Multi-word families: replace spaces with underscores: \`font-['Open_Sans']\`, \`font-['Plus_Jakarta_Sans']\`. Tailwind decodes underscores back to spaces.
+- DO NOT include the \`-SemiBold\` / \`-Bold\` suffix in the family — it's encoded by the weight class instead. Wrong: \`font-['Gilroy-SemiBold']\`. Right: \`font-['Gilroy'] font-semibold\`.
+
+### Worked example
+
+Given JSON like:
+\`\`\`json
+{ "characters": "Hello", "style": { "fontFamily": "Gilroy-Bold", "fontSize": 16, "letterSpacing": 0.4, "lineHeightPx": 24 } }
+\`\`\`
+
+Emit:
+\`\`\`tsx
+<p className="font-['Gilroy'] font-bold text-[16px] leading-[24px] tracking-[0.4px]">Hello</p>
+\`\`\`
+
+If the design uses three families like Gilroy (multiple weights), Inter, and Roboto, the single \`<style>\` tag becomes:
+
+\`\`\`tsx
+<style>{\`@import url('https://fonts.googleapis.com/css2?family=Gilroy:wght@300;400;500;600;700;800;900&family=Inter:wght@300;400;500;600;700;800;900&family=Roboto:wght@300;400;500;600;700;800;900&display=swap');\`}</style>
+\`\`\`
 
 ## Shapes and small elements (pay extra attention)
 
@@ -134,12 +205,21 @@ export interface CodegenOptions {
 }
 
 function formatIssues(diff: DiffReport): string {
-  const severityOrder: Record<string, number> = { critical: 0, moderate: 1, minor: 2 };
+  const severityOrder: Record<string, number> = {
+    critical: 0,
+    moderate: 1,
+    minor: 2,
+  };
   const sorted = [...diff.issues].sort(
-    (a, b) => (severityOrder[a.severity ?? "moderate"] ?? 1) - (severityOrder[b.severity ?? "moderate"] ?? 1),
+    (a, b) =>
+      (severityOrder[a.severity ?? "moderate"] ?? 1) -
+      (severityOrder[b.severity ?? "moderate"] ?? 1),
   );
   return sorted
-    .map((issue, i) => `${i + 1}. [${issue.category}]${issue.severity ? ` (${issue.severity})` : ""} ${issue.description}`)
+    .map(
+      (issue, i) =>
+        `${i + 1}. [${issue.category}]${issue.severity ? ` (${issue.severity})` : ""} ${issue.description}`,
+    )
     .join("\n\n");
 }
 
@@ -160,11 +240,11 @@ export async function runCodegen(
   const { existingComponent, diffReport, guidelines, debugDir, iter } = options;
   const isRefinement = !!(existingComponent && diffReport);
 
-  const { client, model, provider } = createLLMClient();
+  const { client, model } = createLLMClient();
 
   const { componentName: componentNameHint } = parseFigmaUrl(figmaUrl);
   const mode = isRefinement ? "refine" : "generate";
-  console.log(`  [Codegen] mode: ${mode} | backend: ${provider} (${model})`);
+  console.log(`  [Codegen] mode: ${mode} | model: ${model}`);
 
   // Build system prompt with guidelines
   const systemPrompt = buildSystemPrompt(guidelines);
@@ -174,10 +254,12 @@ export async function runCodegen(
   // - Generation: multimodal array (JSON text + Figma screenshot image)
   type UserContentPart =
     | { type: "text"; text: string }
-    | { type: "image_url"; image_url: { url: string; detail: "high" | "low" | "auto" } };
+    | {
+        type: "image_url";
+        image_url: { url: string; detail: "high" | "low" | "auto" };
+      };
   let userText: string;
   let userContent: string | UserContentPart[];
-  let cacheUserKey: string;
 
   if (isRefinement) {
     userText = `Current TSX to fix:
@@ -199,9 +281,8 @@ Instructions:
 3. Output the complete fixed TSX with every issue resolved.
 4. Do not change anything not mentioned in the issues.`;
     userContent = userText;
-    cacheUserKey = userText;
   } else {
-    console.log("  [Codegen] fetching design context…");
+    console.log("  [Codegen] fetching design context...");
     const [designContext, screenshotB64] = await Promise.all([
       fetchFigmaNodeJson(figmaUrl),
       fetchFigmaScreenshot(figmaUrl),
@@ -210,7 +291,11 @@ Instructions:
       `  [Codegen] design context fetched (JSON ${Math.round(designContext.jsonString.length / 1024)} KB, screenshot ${Math.round(screenshotB64.length / 1024)} KB)`,
     );
     if (debugDir) {
-      await writeDebug(debugDir, "design-context.json", designContext.jsonString);
+      await writeDebug(
+        debugDir,
+        "design-context.json",
+        designContext.jsonString,
+      );
     }
 
     if (process.env.STOP_AFTER_FIGMA === "1") {
@@ -231,16 +316,12 @@ The image attached below is the rendered Figma frame — your visual ground trut
       { type: "text", text: userText },
       {
         type: "image_url",
-        image_url: { url: `data:image/png;base64,${screenshotB64}`, detail: "high" },
+        image_url: {
+          url: `data:image/png;base64,${screenshotB64}`,
+          detail: "high",
+        },
       },
     ];
-
-    const screenshotHash = crypto
-      .createHash("sha256")
-      .update(screenshotB64)
-      .digest("hex")
-      .slice(0, 16);
-    cacheUserKey = `${userText}\n[image:${screenshotHash}]`;
   }
 
   // Debug artifacts
@@ -253,29 +334,22 @@ The image attached below is the rendered Figma frame — your visual ground trut
       `=== SYSTEM ===\n${systemPrompt}\n\n=== USER ===\n${userText}${isRefinement ? "" : "\n\n[+ Figma screenshot attached as image_url]"}`,
     );
 
-  // LLM call (with cache)
-  const cached = await readCache(model, systemPrompt, cacheUserKey);
+  console.log("  [Codegen] calling LLM...");
   let rawTsx: string;
-  if (cached) {
-    console.log(`  [Codegen] cache hit — skipping LLM call`);
-    rawTsx = cached;
-  } else {
-    console.log("  [Codegen] calling LLM…");
-    try {
-      const response = await client.chat.completions.create({
-        model,
-        max_completion_tokens: 16384,
-        messages: [
-          { role: "system", content: systemPrompt },
-          // OpenAI typings expect a string here when content is mixed; cast — the SDK accepts the multimodal array shape at runtime.
-          { role: "user", content: userContent as unknown as string },
-        ],
-      });
-      rawTsx = response.choices[0]?.message?.content ?? "";
-    } catch (err) {
-      throw new Error(`Codegen Agent — ${provider} call failed: ${String(err)}`);
-    }
-    await writeCache(model, systemPrompt, cacheUserKey, rawTsx);
+  try {
+    const response = await client.chat.completions.create({
+      model,
+      max_tokens: 16384,
+      messages: [
+        { role: "system", content: systemPrompt },
+        // OpenAI typings expect a string when content is mixed; cast —
+        // the SDK accepts the multimodal array shape at runtime.
+        { role: "user", content: userContent as unknown as string },
+      ],
+    });
+    rawTsx = response.choices[0]?.message?.content ?? "";
+  } catch (err) {
+    throw new Error(`Codegen Agent — LLM call failed: ${String(err)}`);
   }
 
   if (!rawTsx.trim()) {
@@ -295,15 +369,5 @@ The image attached below is the rendered Figma frame — your visual ground trut
 
   if (debugDir) await writeDebug(debugDir, `${debugPrefix}-response.tsx`, tsx);
 
-  return {
-    tsx,
-    componentName,
-    dependencies: existingComponent?.dependencies ?? ["react"],
-    tailwindConfigPatch: existingComponent?.tailwindConfigPatch ?? null,
-    ...(isRefinement && diffReport
-      ? {
-          patchSummary: `Fixed ${diffReport.issues.length} issue(s): ${diffReport.issues.map((i) => i.category).join(", ")}`,
-        }
-      : {}),
-  };
+  return { tsx, componentName };
 }
