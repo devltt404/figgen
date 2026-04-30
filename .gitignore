@@ -1,6 +1,6 @@
 .env
 node_modules
 output
-.claude/**
+.claude
 .ignore
 sandbox/public/figma-assets/
