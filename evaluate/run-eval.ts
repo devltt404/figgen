@@ -91,10 +91,9 @@ async function evaluateOne(
   let finalIssueCount: number | null = null;
   let pipelineError: string | undefined;
 
-  // useMemory:false keeps runs independent — no cross-case context bleed.
   await runPipeline(
     url,
-    { maxIter: MAX_ITER, useMemory: false },
+    { maxIter: MAX_ITER },
     (event: PipelineEvent) => {
       switch (event.type) {
         case "figma_screenshot":

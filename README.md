@@ -45,8 +45,10 @@ This starts the API server (`localhost:4111`) and the React UI (`localhost:5174`
 ### Option B — CLI (single run, useful for scripting)
 
 ```bash
-npm run pipeline -- "<figmaUrl>" [--max-iter N] [--use-memory]
+npm run pipeline -- "<figmaUrl>" [--max-iter N]
 ```
+
+Long-term memory (design guidelines from prior runs) is always read at start and appended to after a successful session — see `output/memory/guidelines.md`.
 
 Examples:
 
@@ -56,14 +58,11 @@ npm run pipeline -- "https://www.figma.com/design/abc123/My-File?node-id=1-2"
 
 # Single-shot generation, no refinement
 npm run pipeline -- "https://www.figma.com/design/abc123/My-File?node-id=1-2" --max-iter 1
-
-# Enable long-term memory: read prior design guidelines and append new ones
-npm run pipeline -- "<url>" --use-memory
 ```
 
 The generated component is written to [sandbox/src/GeneratedComponent.tsx](sandbox/src/GeneratedComponent.tsx). Per-iteration debug artifacts (rendered screenshots, diff reports, prompts) are saved under `output/<timestamp>/`.
 
-### Option C — Evaluation harness
+## Evaluation
 
 ```bash
 npm run eval

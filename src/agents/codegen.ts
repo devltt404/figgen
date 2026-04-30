@@ -298,13 +298,6 @@ Instructions:
       );
     }
 
-    if (process.env.STOP_AFTER_FIGMA === "1") {
-      console.log(
-        `\n  [Debug] --stop-after-figma: design context saved to ${debugDir ?? "."}`,
-      );
-      process.exit(0);
-    }
-
     userText = `FIGMA NODE JSON (pruned from /v1/files/:key/nodes):
 \`\`\`json
 ${designContext.jsonString}

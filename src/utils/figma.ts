@@ -1,5 +1,7 @@
-// Figma REST API client.
-// Assisted with Claude Code.
+/**
+ * Figma REST API client.
+ * Assisted with Claude Code.
+ */
 
 import "dotenv/config";
 import fs from "node:fs/promises";
@@ -58,6 +60,7 @@ export function parseFigmaUrl(url: string): FigmaUrlParts {
   return { fileKey, nodeId, componentName };
 }
 
+// Best-effort viewport lookup; returns null on any failure so the caller can use a fallback size.
 export async function getFigmaNodeSize(
   figmaUrl: string,
 ): Promise<{ width: number; height: number } | null> {
@@ -426,6 +429,7 @@ export async function fetchFigmaScreenshot(figmaUrl: string): Promise<string> {
   const { fileKey, nodeId } = parseFigmaUrl(figmaUrl);
 
   console.log("  [Figma] GET /v1/images/... ...");
+  // scale=2 matches Playwright's deviceScaleFactor in render.ts so both screenshots share pixel dimensions.
   const imgRes = await fetch(
     `https://api.figma.com/v1/images/${fileKey}?ids=${encodeURIComponent(nodeId)}&format=png&scale=2`,
     { headers: { "X-Figma-Token": token } },

@@ -62,8 +62,6 @@ export type PipelineEvent =
 
 export interface PipelineOptions {
   maxIter?: number;
-  skipCodegen?: boolean;
-  useMemory?: boolean;
 }
 
 function isFigmaUrl(url: string): boolean {
@@ -92,8 +90,6 @@ export async function runPipeline(
   emit: (event: PipelineEvent) => void,
 ): Promise<void> {
   const maxIter = options.maxIter ?? DEFAULT_MAX_ITER;
-  const skipCodegen = options.skipCodegen ?? false;
-  const useMemory = options.useMemory ?? false;
 
   if (!isFigmaUrl(figmaUrl)) {
     emit({ type: "error", message: "Invalid Figma URL" });
@@ -110,21 +106,19 @@ export async function runPipeline(
   // Read long-term memory (design guidelines from prior sessions)
   // -------------------------------------------------------------------------
   let guidelines: string[] = [];
-  if (useMemory) {
-    try {
-      guidelines = await readGuidelines();
-      if (guidelines.length > 0) {
-        emit({
-          type: "log",
-          message: `Loaded ${guidelines.length} design guideline(s) from memory`,
-        });
-      }
-    } catch {
+  try {
+    guidelines = await readGuidelines();
+    if (guidelines.length > 0) {
       emit({
         type: "log",
-        message: "Warning: could not read guidelines from memory",
+        message: `Loaded ${guidelines.length} design guideline(s) from memory`,
       });
     }
+  } catch {
+    emit({
+      type: "log",
+      message: "Warning: could not read guidelines from memory",
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -165,85 +159,50 @@ export async function runPipeline(
   let currentComponent: GeneratedComponent | undefined;
   let latestDiff: DiffReport | undefined;
 
-  // Handle skipCodegen: load existing component from sandbox
-  if (skipCodegen) {
-    const existing = await fs
-      .readFile(SANDBOX_COMPONENT_PATH, "utf-8")
-      .catch(() => null);
-    if (!existing) {
-      emit({
-        type: "error",
-        message: `No existing component at ${SANDBOX_COMPONENT_PATH}`,
-      });
-      return;
-    }
-    const nameMatch = existing.match(
-      /export\s+(?:default\s+)?(?:function|const)\s+([A-Z][A-Za-z0-9_]*)/,
-    );
-    currentComponent = {
-      tsx: existing,
-      componentName: nameMatch?.[1] ?? "GeneratedComponent",
-    };
-    emit({
-      type: "log",
-      message: "Codegen skipped — using existing component",
-    });
-    emit({
-      type: "codegen_done",
-      componentName: currentComponent.componentName,
-      lines: existing.split("\n").length,
-      tsx: existing,
-      mode: "generate",
-      iteration: 1,
-    });
-  }
-
   // iteration < maxIter: maxIter is the total number of render cycles.
   // maxIter=1 → iteration 1 only (initial codegen, no refinement).
   // maxIter=2 → iterations 1 and 2 (initial + 1 refinement), etc.
   for (let iteration = 0; iteration < maxIter; iteration++) {
     // --- Codegen / Refine ---
-    if (!skipCodegen || iteration > 0) {
-      const isRefinement = iteration > 0 && currentComponent && latestDiff;
-      const mode = isRefinement ? "refine" : "generate";
-      emit({
-        type: "log",
-        message: `${isRefinement ? "Refining" : "Generating"} iteration ${iteration + 1}...`,
-      });
+    const isRefinement = iteration > 0 && currentComponent && latestDiff;
+    const mode = isRefinement ? "refine" : "generate";
+    emit({
+      type: "log",
+      message: `${isRefinement ? "Refining" : "Generating"} iteration ${iteration + 1}...`,
+    });
 
-      try {
-        currentComponent = await runCodegen(figmaUrl, {
-          existingComponent: isRefinement ? currentComponent : undefined,
-          diffReport: isRefinement ? latestDiff : undefined,
-          guidelines,
-          debugDir: runDir,
-          iter: iteration,
-        });
-      } catch (err) {
-        emit({
-          type: "error",
-          message: `Codegen failed (iteration ${iteration + 1}): ${String(err)}`,
-        });
-        return;
-      }
-
-      const lineCount = currentComponent.tsx.split("\n").length;
-      emit({
-        type: "log",
-        message: `Codegen done — ${currentComponent.componentName} (${lineCount} lines)`,
+    try {
+      currentComponent = await runCodegen(figmaUrl, {
+        existingComponent: isRefinement ? currentComponent : undefined,
+        diffReport: isRefinement ? latestDiff : undefined,
+        guidelines,
+        debugDir: runDir,
+        iter: iteration,
       });
+    } catch (err) {
       emit({
-        type: "codegen_done",
-        componentName: currentComponent.componentName,
-        lines: lineCount,
-        tsx: currentComponent.tsx,
-        mode,
-        iteration: iteration + 1,
+        type: "error",
+        message: `Codegen failed (iteration ${iteration + 1}): ${String(err)}`,
       });
+      return;
     }
 
+    const lineCount = currentComponent.tsx.split("\n").length;
+    emit({
+      type: "log",
+      message: `Codegen done — ${currentComponent.componentName} (${lineCount} lines)`,
+    });
+    emit({
+      type: "codegen_done",
+      componentName: currentComponent.componentName,
+      lines: lineCount,
+      tsx: currentComponent.tsx,
+      mode,
+      iteration: iteration + 1,
+    });
+
     // --- Write Sandbox ---
-    await writeSandbox(currentComponent!);
+    await writeSandbox(currentComponent);
 
     // --- Render (tool, not agent) ---
     emit({ type: "log", message: `Rendering iteration ${iteration + 1}...` });
@@ -317,7 +276,7 @@ export async function runPipeline(
   // -------------------------------------------------------------------------
   // Extract and save guidelines to long-term memory (after final iteration)
   // -------------------------------------------------------------------------
-  if (useMemory && sessionDiffs.length > 0) {
+  if (sessionDiffs.length > 0) {
     try {
       emit({ type: "log", message: "Extracting design guidelines..." });
       const newGuidelines = await extractGuidelines(

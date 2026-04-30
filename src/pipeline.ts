@@ -2,7 +2,7 @@
  * CLI entry point for the figgen pipeline.
  *
  * Usage:
- *   npx tsx src/pipeline.ts "<figmaUrl>" [--max-iter N] [--skip-codegen] [--use-memory]
+ *   npx tsx src/pipeline.ts "<figmaUrl>" [--max-iter N]
  *
  * Thin wrapper around `runPipeline` (src/pipeline-runner.ts) that prints events
  * to the terminal and exits non-zero on error.
@@ -18,13 +18,7 @@ function parseArgs(argv: string[]) {
   const maxIterIdx = argv.indexOf("--max-iter");
   const maxIter =
     maxIterIdx !== -1 ? parseInt(argv[maxIterIdx + 1] ?? "", 10) : DEFAULT_MAX_ITER;
-  return {
-    figmaUrl,
-    maxIter,
-    skipCodegen: argv.includes("--skip-codegen"),
-    useMemory: argv.includes("--use-memory"),
-    stopAfterFigma: argv.includes("--stop-after-figma"),
-  };
+  return { figmaUrl, maxIter };
 }
 
 async function main(): Promise<void> {
@@ -32,7 +26,7 @@ async function main(): Promise<void> {
 
   if (!args.figmaUrl) {
     console.error(
-      'Usage: npx tsx src/pipeline.ts "<figmaUrl>" [--max-iter N] [--skip-codegen] [--use-memory]',
+      'Usage: npx tsx src/pipeline.ts "<figmaUrl>" [--max-iter N]',
     );
     process.exit(1);
   }
@@ -40,7 +34,6 @@ async function main(): Promise<void> {
     console.error("--max-iter must be a non-negative integer");
     process.exit(1);
   }
-  if (args.stopAfterFigma) process.env.STOP_AFTER_FIGMA = "1";
 
   console.log(`\nfiggen — Figma-to-code pipeline`);
   console.log(`URL: ${args.figmaUrl}\n`);
@@ -78,11 +71,7 @@ async function main(): Promise<void> {
 
   await runPipeline(
     args.figmaUrl,
-    {
-      maxIter: args.maxIter,
-      skipCodegen: args.skipCodegen,
-      useMemory: args.useMemory,
-    },
+    { maxIter: args.maxIter },
     onEvent,
   );
 
